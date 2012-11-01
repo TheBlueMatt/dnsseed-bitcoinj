@@ -291,7 +291,7 @@ public class Dnsseed {
                                 System.out.print(" ");
                             System.out.println(store.retryTimes[state.ordinal()] / 60);
                         }
-                        System.out.println("Consider a node WAS_GOOD after failure for " + (store.ageOfLastSuccessToRetryAsGood / 60) + " hours.");
+                        System.out.println("Consider a node WAS_GOOD after failure for " + (store.ageOfLastSuccessToRetryAsGood / 60) + " minutes.");
                     }
                     System.out.println();
                     System.out.println("Commands:");
