@@ -319,10 +319,9 @@ public class Dnsseed {
                     synchronized (statusLock) {
                         System.out.println("This round of scans: " + numScansCompletedThisRound + "/" + numScansThisRound +
                                 (isWaitingForEmptyPeerToStatusMap ? " (waiting for final cleanup before next round)" : ""));
-                        System.out.println("Number of rounds of scans completed: " + numRoundsComplete);
+                        //System.out.println("Number of rounds of scans completed: " + numRoundsComplete);
                     }
-                    System.out.println("Current block count: " + chain.getBestChainHeight());
-                    System.out.println("Number of block hashes stored in data store: " + hashesStored);
+                    System.out.println("Current block count: " + chain.getBestChainHeight() + " == " + hashesStored);
                     System.out.println("Timeout for full run (in seconds): " + totalRunTimeoutCache);
                     System.out.println();
                     System.out.println("Retry times (in minutes):");

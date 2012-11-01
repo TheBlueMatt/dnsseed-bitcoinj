@@ -218,10 +218,11 @@ public class MemoryDataStore extends DataStore {
                     print = true;
                 if (!addr.getAddress().toString().split("/")[0].equals("") && state != PeerState.UNTESTED && state != PeerState.UNTESTABLE_ADDRESS)
                     print = true;
+                if (oldState != null && oldState.state == PeerState.WAS_GOOD && (state == PeerState.TIMEOUT_DURING_REQUEST || state == PeerState.TIMEOUT || state == PeerState.PEER_DISCONNECTED))
+                    print = false;
                 if (print && (oldState == null || oldState.state != state))
                     Dnsseed.LogLine((oldState != null ? ("Updated node " + addr.toString() + " state was " + oldState.state) :
-                        ("Added node " + addr.toString())) +
-                        " new state is " + state.name());
+                        ("Added node " + addr.toString())) + " new state is " + state.name());
                 // Calculate last good time and check if we are WAS_GOOD
                 long lastGoodTime = state == PeerState.GOOD ? -1 : (oldState != null ? oldState.node.object.lastGoodTime : 0);
                 if (lastGoodTime > wasGoodCutoff)
