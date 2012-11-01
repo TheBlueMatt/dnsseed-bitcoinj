@@ -236,21 +236,11 @@ public class Dnsseed {
     private static void LaunchStatsPrinterThread() {
         new Thread() {
             public void run() {
-                String nodeStatusCount = "";
-                long nodeStatusCountTimeToGenerate = 0;
                 while (true) {
                     synchronized (exitableLock) {
                         exitableSemaphore++;
                     }
                     //Pre-loaded values
-                    synchronized(printNodeCountsLock) {
-                        if (printNodeCounts) {
-                            long nodeStatusCountStart = System.currentTimeMillis();
-                            nodeStatusCount = store.getStatus();
-                            long nodeStatusCountStop = System.currentTimeMillis();
-                            nodeStatusCountTimeToGenerate = nodeStatusCountStop - nodeStatusCountStart;
-                        }
-                    }
                     int hashesStored = store.getNumberOfHashesStored();
                     int totalRunTimeoutCache;
                     synchronized(store.totalRunTimeoutLock) {
@@ -265,8 +255,12 @@ public class Dnsseed {
                         }
                     }
                     System.out.println();
-                    System.out.println("Node counts by status (" + (printNodeCounts ? "updating, " : "not updating, ") + "took " + nodeStatusCountTimeToGenerate + " milliseconds to generate):");
-                    System.out.println(nodeStatusCount);
+                    synchronized(printNodeCountsLock) {
+                        if (printNodeCounts) {
+                            System.out.println("Node counts by status:");
+                            System.out.println(store.getStatus());
+                        }
+                    }
                     System.out.println();
                     synchronized (peerToChannelMap) {
                         System.out.println("Current connections open/in progress: " + peerToChannelMap.size());
@@ -301,11 +295,10 @@ public class Dnsseed {
                     System.out.println("c x: Change connections opened per second to x");
                     System.out.println("t x: Change full run timeout to x seconds");
                     System.out.println("n: Enable/disable printing node counts");
-                    System.out.println("\033[s"); // Save cursor position and provide a blank line after cursor
-                    System.out.println(); // Give us a blank line after cursor
+                    System.out.print("\n\033[s"); // Save cursor position and provide a blank line before cursor
                     System.out.print("\033[;H\033[2K");
                     System.out.println("Most recent log:");
-                    System.out.print("\033[u"); // Restore cursor position
+                    System.out.print("\033[u\033[1A"); // Restore cursor position and go up one line
                     synchronized (exitableLock) {
                         exitableSemaphore--;
                         exitableLock.notifyAll();
