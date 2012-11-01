@@ -185,10 +185,23 @@ public class Dnsseed {
                         LogLine("Invalid argument");
                     }
                 }
+            } else if(line.length() >= 3 && line.charAt(0) == 'w' && line.charAt(1) == ' ') {
+                String[] values = line.split(" ");
+                if (values.length == 2) {
+                    try {
+                        synchronized(store.retryTimesLock) {
+                            store.ageOfLastSuccessToRetryAsGood = Integer.parseInt(values[1]) * 60;
+                        }
+                    } catch (NumberFormatException e) {
+                        LogLine("Invalid argument");
+                    }
+                }
             } else if (line.equals("n")) {
                 synchronized(printNodeCountsLock) {
                     printNodeCounts = !printNodeCounts;
                 }
+            } else {
+                LogLine("Invalid command/arguments");
             }
             line = reader.readLine();
         }
