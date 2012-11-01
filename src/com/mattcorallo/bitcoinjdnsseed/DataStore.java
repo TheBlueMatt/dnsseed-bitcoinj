@@ -34,6 +34,7 @@ public abstract class DataStore {
         TIMEOUT,
         TIMEOUT_DURING_REQUEST,
         GOOD,
+        WAS_GOOD, // Was good up until some time N, now its not
         UNTESTABLE_ADDRESS
     }
     // The maximum length of a name in PeerState
@@ -68,6 +69,7 @@ public abstract class DataStore {
             retryTimes[PeerState.TIMEOUT.ordinal()] =                48 *60*60;
             retryTimes[PeerState.TIMEOUT_DURING_REQUEST.ordinal()] =  1 *60*60;
             retryTimes[PeerState.GOOD.ordinal()] =                       30*60;
+            retryTimes[PeerState.WAS_GOOD.ordinal()] =                   30*60;
             retryTimes[PeerState.UNTESTABLE_ADDRESS.ordinal()] =      Integer.MAX_VALUE; // Never retest
         }
     }

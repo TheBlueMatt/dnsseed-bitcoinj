@@ -6,11 +6,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
-import java.io.Serializable;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 
 import com.google.bitcoin.core.Sha256Hash;
@@ -106,9 +104,20 @@ class LinkedList<Type extends FastSerializer> {
 class PeerAndLastUpdateTime implements FastSerializer {
     InetSocketAddress address = null;
     long lastUpdateTime = 0;
-    PeerAndLastUpdateTime(InetSocketAddress address) {
+    long lastGoodTime;
+    
+    /**
+     * Constructor
+     * @param address
+     * @param lastGoodTime if (-1) set to current time
+     */
+    PeerAndLastUpdateTime(InetSocketAddress address, long lastGoodTime) {
         this.address = address;
         this.lastUpdateTime = System.currentTimeMillis()/1000;
+        if (lastGoodTime != -1)
+            this.lastGoodTime = lastGoodTime;
+        else
+            this.lastGoodTime = this.lastUpdateTime;
     }
     
     // For deserialization
@@ -118,12 +127,14 @@ class PeerAndLastUpdateTime implements FastSerializer {
     public void writeTo(ObjectOutputStream stream) throws IOException {
         stream.writeObject(address);
         stream.writeLong(lastUpdateTime);
+        stream.writeLong(lastGoodTime);
     }
     
     @Override
     public void readFrom(ObjectInputStream stream) throws IOException, ClassNotFoundException {
         this.address = (InetSocketAddress)stream.readObject();
         this.lastUpdateTime = stream.readLong();
+        this.lastGoodTime = stream.readLong();
     }
 }
 
@@ -189,6 +200,12 @@ public class MemoryDataStore extends DataStore {
 
     @Override
     public void addUpdateNode(InetSocketAddress addr, PeerState state) {
+        if (state == DataStore.PeerState.WAS_GOOD)
+            Dnsseed.ErrorExit("addUpdateNode WAS_GOOD");
+        long wasGoodCutoff;
+        synchronized (retryTimesLock) {
+            wasGoodCutoff = System.currentTimeMillis()/1000 - ageOfLastSuccessToRetryAsGood;
+        }
         synchronized (addressToStatusMap) {
             PeerStateAndNode oldState = addressToStatusMap.get(addr);
             if (oldState == null || state != PeerState.UNTESTED) {
@@ -203,8 +220,12 @@ public class MemoryDataStore extends DataStore {
                     Dnsseed.LogLine((oldState != null ? ("Updated node " + addr.toString() + " state was " + oldState.state) :
                         ("Added node " + addr.toString())) +
                         " new state is " + state.name());
+                // Calculate last good time and check if we are WAS_GOOD
+                long lastGoodTime = state == PeerState.GOOD ? -1 : (oldState != null ? oldState.node.object.lastGoodTime : 0);
+                if (lastGoodTime > wasGoodCutoff)
+                    state = PeerState.WAS_GOOD;
+                LinkedList<PeerAndLastUpdateTime>.Node newNode = statusToAddressesMap[state.ordinal()].addToTail(new PeerAndLastUpdateTime(addr, lastGoodTime));
                 // Remove/Update
-                LinkedList<PeerAndLastUpdateTime>.Node newNode = statusToAddressesMap[state.ordinal()].addToTail(new PeerAndLastUpdateTime(addr));
                 if (oldState != null) {
                     statusToAddressesMap[oldState.state.ordinal()].remove(oldState.node);
                     oldState.state = state;
