@@ -154,7 +154,7 @@ public class Dnsseed {
                         int value = Integer.parseInt(values[2]);
                         synchronized(store.retryTimesLock) {
                             try {
-                                store.retryTimes[index] = value * 60*1000;
+                                store.retryTimes[index] = value * 60;
                             } catch (IndexOutOfBoundsException e) {
                                 LogLine("Invalid status code");
                             }
@@ -276,17 +276,19 @@ public class Dnsseed {
                             System.out.print(state.name() + " (" + state.ordinal() + "): ");
                             for (int i = DataStore.PEER_STATE_MAX_LENGTH; i > state.name().length(); i--)
                                 System.out.print(" ");
-                            System.out.println(store.retryTimes[state.ordinal()] / (60 * 1000));
+                            System.out.println(store.retryTimes[state.ordinal()] / 60);
                         }
+                        System.out.println("Consider a node WAS_GOOD after failure for " + (store.ageOfLastSuccessToRetryAsGood / 60) + " hours.");
                     }
                     System.out.println();
                     System.out.println("Commands:");
                     System.out.println("q: quit");
                     System.out.println("r x y: Change retry time for status x (int value, see retry times section for name mappings) to y (in hours)");
+                    System.out.println("w x: Change the amount of time a node is considered WAS_GOOD after it fails to x (in hours)");
                     System.out.println("c x: Change connections opened per second to x");
                     System.out.println("t x: Change full run timeout to x seconds");
                     System.out.println("n: Enable/disable printing node counts");
-                    System.out.print("\033[s"); // Save cursor position
+                    System.out.println("\033[s"); // Save cursor position and provide a blank line after cursor
                     System.out.println(); // Give us a blank line after cursor
                     System.out.print("\033[;H\033[2K");
                     System.out.println("Most recent log:");

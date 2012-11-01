@@ -176,6 +176,7 @@ public class MemoryDataStore extends DataStore {
             synchronized(retryTimesLock) {
                 for (int i = 0; i < retryTimes.length; i++)
                     retryTimes[i] = in.readInt();
+                ageOfLastSuccessToRetryAsGood = in.readInt();
             }
             synchronized(connectionsPerSecondLock) {
                 connectionsPerSecond = in.readInt();
@@ -329,6 +330,7 @@ public class MemoryDataStore extends DataStore {
             synchronized(retryTimesLock) {
                 for (int i : retryTimes)
                     out.writeInt(i);
+                out.writeInt(ageOfLastSuccessToRetryAsGood);
             }
             synchronized(connectionsPerSecondLock) {
                 out.writeInt(connectionsPerSecond);

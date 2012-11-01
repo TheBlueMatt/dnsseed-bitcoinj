@@ -45,7 +45,7 @@ public abstract class DataStore {
     public int[] retryTimes = new int[PeerState.values().length];
     // Locked by retryTimesLock
     // If the node was GOOD within the last N minutes, retry as often as GOOD
-    public int ageOfLastSuccessToRetryAsGood = 0;
+    public int ageOfLastSuccessToRetryAsGood;
     
     // How far back in the chain to request the test block
     static final int MIN_BLOCK_OFFSET = 50;
@@ -69,7 +69,9 @@ public abstract class DataStore {
             retryTimes[PeerState.TIMEOUT.ordinal()] =                48 *60*60;
             retryTimes[PeerState.TIMEOUT_DURING_REQUEST.ordinal()] =  1 *60*60;
             retryTimes[PeerState.GOOD.ordinal()] =                       30*60;
-            retryTimes[PeerState.WAS_GOOD.ordinal()] =                   30*60;
+            retryTimes[PeerState.WAS_GOOD.ordinal()] =                   45*60;
+            ageOfLastSuccessToRetryAsGood =                          24 *60*60;
+
             retryTimes[PeerState.UNTESTABLE_ADDRESS.ordinal()] =      Integer.MAX_VALUE; // Never retest
         }
     }
