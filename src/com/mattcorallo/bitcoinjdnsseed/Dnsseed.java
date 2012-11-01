@@ -80,7 +80,7 @@ public class Dnsseed {
     static boolean scanable = false;
     
     static Object printNodeCountsLock = new Object();
-    static boolean printNodeCounts = false;
+    static boolean printNodeCounts = true;
     
     static Object statusLock = new Object();
     static int numRoundsComplete = 0;
@@ -287,7 +287,7 @@ public class Dnsseed {
                     synchronized (store.retryTimesLock) {
                         for (DataStore.PeerState state : DataStore.PeerState.values()) {
                             System.out.print(state.name() + " (" + state.ordinal() + "): ");
-                            for (int i = DataStore.PEER_STATE_MAX_LENGTH; i > state.name().length(); i--)
+                            for (int i = DataStore.PEER_STATE_MAX_LENGTH - (state.ordinal() > 9 ? 1 : 0); i > state.name().length(); i--)
                                 System.out.print(" ");
                             System.out.println(store.retryTimes[state.ordinal()] / 60);
                         }

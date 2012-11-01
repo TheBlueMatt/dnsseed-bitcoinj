@@ -265,7 +265,7 @@ public class MemoryDataStore extends DataStore {
             int total = 0;
             for (PeerState state : PeerState.values()) {
                 states += state.name() + ": ";
-                for (int i = DataStore.PEER_STATE_MAX_LENGTH - (state.ordinal() > 9 ? 1 : 0); i > state.name().length(); i--)
+                for (int i = DataStore.PEER_STATE_MAX_LENGTH; i > state.name().length(); i--)
                     states += " ";
                 int currentCount = statusToAddressesMap[state.ordinal()].getSize();
                 total += currentCount;
