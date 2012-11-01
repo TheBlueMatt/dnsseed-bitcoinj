@@ -633,7 +633,7 @@ public class Dnsseed {
         }
     }
     
-    static ExecutorService disconnectPeerExecutor = Executors.newFixedThreadPool(2);
+    static ExecutorService disconnectPeerExecutor = Executors.newFixedThreadPool(1);
     private static void AsyncUpdatePeer(final Peer peer, final DataStore.PeerState newState) {
         disconnectPeerExecutor.submit(new Runnable() {
             public void run() {
@@ -653,7 +653,7 @@ public class Dnsseed {
         });
     }
     
-    static ExecutorService addUpdateNodeExecutor = Executors.newFixedThreadPool(2);
+    static ExecutorService addUpdateNodeExecutor = Executors.newFixedThreadPool(1);
     private static void AsyncAddUntestedNodes(final List<PeerAddress> addresses) {
         addUpdateNodeExecutor.submit(new Runnable() {
             public void run() {
