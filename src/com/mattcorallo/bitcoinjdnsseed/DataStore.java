@@ -39,9 +39,12 @@ public abstract class DataStore {
     // The maximum length of a name in PeerState
     public static final int PEER_STATE_MAX_LENGTH = 22;
     
-    // Retry times in milliseconds
+    // Retry times in seconds
     public Object retryTimesLock = new Object();
     public int[] retryTimes = new int[PeerState.values().length];
+    // Locked by retryTimesLock
+    // If the node was GOOD within the last N minutes, retry as often as GOOD
+    public int ageOfLastSuccessToRetryAsGood = 0;
     
     // How far back in the chain to request the test block
     static final int MIN_BLOCK_OFFSET = 50;
@@ -56,15 +59,15 @@ public abstract class DataStore {
 
     public DataStore() {
         synchronized(retryTimesLock) {
-            retryTimes[PeerState.UNTESTED.ordinal()] =               -1 *60*60*1000; // Always try UNTESTED Nodes
-            retryTimes[PeerState.LOW_BLOCK_COUNT.ordinal()] =         2 *60*60*1000; // Every 2 hours
-            retryTimes[PeerState.HIGH_BLOCK_COUNT.ordinal()] =        2 *60*60*1000; // Every 2 hours
-            retryTimes[PeerState.LOW_VERSION.ordinal()] =            48 *60*60*1000; // Every 2 days
-            retryTimes[PeerState.PEER_DISCONNECTED.ordinal()] =      12 *60*60*1000; // Every 12 hours
-            retryTimes[PeerState.NOT_FULL_NODE.ordinal()] =          96 *60*60*1000; // Every 4 days
-            retryTimes[PeerState.TIMEOUT.ordinal()] =                48 *60*60*1000; // Every 2 days
-            retryTimes[PeerState.TIMEOUT_DURING_REQUEST.ordinal()] = 12 *60*60*1000; // Every 12 hours
-            retryTimes[PeerState.GOOD.ordinal()] =                    1 *60*60*1000; // Every hour
+            retryTimes[PeerState.UNTESTED.ordinal()] =                0 *60*60; // Always try UNTESTED Nodes
+            retryTimes[PeerState.LOW_BLOCK_COUNT.ordinal()] =            90*60;
+            retryTimes[PeerState.HIGH_BLOCK_COUNT.ordinal()] =        2 *60*60;
+            retryTimes[PeerState.LOW_VERSION.ordinal()] =            24 *60*60;
+            retryTimes[PeerState.PEER_DISCONNECTED.ordinal()] =      48 *60*60;
+            retryTimes[PeerState.NOT_FULL_NODE.ordinal()] =          24 *60*60;
+            retryTimes[PeerState.TIMEOUT.ordinal()] =                48 *60*60;
+            retryTimes[PeerState.TIMEOUT_DURING_REQUEST.ordinal()] =  1 *60*60;
+            retryTimes[PeerState.GOOD.ordinal()] =                       30*60;
             retryTimes[PeerState.UNTESTABLE_ADDRESS.ordinal()] =      Integer.MAX_VALUE; // Never retest
         }
     }

@@ -108,7 +108,7 @@ class PeerAndLastUpdateTime implements FastSerializer {
     long lastUpdateTime = 0;
     PeerAndLastUpdateTime(InetSocketAddress address) {
         this.address = address;
-        this.lastUpdateTime = System.currentTimeMillis();
+        this.lastUpdateTime = System.currentTimeMillis()/1000;
     }
     
     // For deserialization
@@ -136,9 +136,7 @@ public class MemoryDataStore extends DataStore {
             this.node = node;
         }
     }
-    
-    private static final int MAX_FILE_UPDATE_FREQUENCY = 1 * 1000; // milliseconds
-    
+        
     private String storageFile;
     
     public MemoryDataStore(String file) {
@@ -225,7 +223,7 @@ public class MemoryDataStore extends DataStore {
                 LinkedList<PeerAndLastUpdateTime>.Node temp = statusToAddressesMap[state.ordinal()].getHead();
                 long targetMaxTime;
                 synchronized (retryTimesLock) {
-                    targetMaxTime = System.currentTimeMillis() - retryTimes[state.ordinal()];
+                    targetMaxTime = System.currentTimeMillis()/1000 - retryTimes[state.ordinal()];
                 }
                 while (temp != null) {
                     if (temp.object.lastUpdateTime >= targetMaxTime)
