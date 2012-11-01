@@ -6,6 +6,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -253,6 +254,22 @@ public class MemoryDataStore extends DataStore {
                     resultsList.add(temp.object.address);
                     temp = temp.next;
                 }
+            }
+            return resultsList;
+        }
+    }
+    
+    @Override
+    public List<InetAddress> getMostRecentGoodNodes(int numNodes, int port) {
+        synchronized (addressToStatusMap) {
+            List<InetAddress> resultsList = new java.util.LinkedList<InetAddress>();
+            LinkedList<PeerAndLastUpdateTime>.Node temp = statusToAddressesMap[PeerState.GOOD.ordinal()].getHead();
+            while (temp != null) {
+                if (resultsList.size() >= numNodes)
+                    break;
+                if (temp.object.address.getPort() == port)
+                    resultsList.add(temp.object.address.getAddress());
+                temp = temp.next;
             }
             return resultsList;
         }

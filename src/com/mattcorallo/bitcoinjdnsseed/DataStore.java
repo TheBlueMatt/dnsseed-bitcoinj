@@ -1,5 +1,6 @@
 package com.mattcorallo.bitcoinjdnsseed;
 
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.List;
 
@@ -79,6 +80,8 @@ public abstract class DataStore {
     public abstract void addUpdateNode(InetSocketAddress addr, PeerState state);
     
     public abstract List<InetSocketAddress> getNodesToTest();
+    
+    public abstract List<InetAddress> getMostRecentGoodNodes(int numNodes, int port);
     
     public abstract int getMinBestHeight();
     

@@ -1,14 +1,14 @@
 package com.mattcorallo.bitcoinjdnsseed;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.lang.management.ManagementFactory;
-import java.lang.management.ThreadInfo;
-import java.lang.management.ThreadMXBean;
+import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -130,6 +130,7 @@ public class Dnsseed {
         InitPeerGroup(args[1]);
         LaunchAddNodesThread();
         LaunchStatsPrinterThread();
+        LaunchDumpGoodAddressesThread(args[0] + "/nodes.dump");
         
         BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
         String line = reader.readLine();
@@ -231,6 +232,53 @@ public class Dnsseed {
                 new Throwable().printStackTrace();
             System.exit(1);
         }
+    }
+    
+    private static void LaunchDumpGoodAddressesThread(final String fileName) { // In BIND Zonefile format
+        final String introLine = "; dnsseed.bluematt.me\n" +
+                ";\n" +
+                "$TTL\t86400\n" +
+                "@\tIN\tSOA\tdnsseedns.bluematt.me. dnsseed.bluematt.me. (\n" +
+                "\t\t\t      1         ; Serial\n" +
+                "\t\t\t 604800         ; Refresh\n" +
+                "\t\t\t  86400         ; Retry\n" +
+                "\t\t\t2419200         ; Expire\n" +
+                "\t\t\t  86400 )       ; Negative Cache TTL\n" +
+                ";\n" +
+                "@\tIN\tNS\tdnsseedns.bluematt.me.\n";
+        final String preEntry = "@\t60\tIN\t";
+        final String preIPv4Entry = "A\t";
+        final String preIPv6Entry = "AAAA\t";
+        final String postEntry = "\n";
+        new Thread() {
+            public void run() {
+                while (true) {
+                    try {
+                        FileOutputStream file = new FileOutputStream(fileName + ".tmp");
+                        file.write(introLine.getBytes());
+                        // We grab the top 25 most recently tested nodes
+                        for (InetAddress address : store.getMostRecentGoodNodes(25, params.port)) {
+                            String line = null;
+                            if (address instanceof Inet4Address)
+                                line = preEntry + preIPv4Entry + address.getHostAddress() + postEntry;
+                            else if (address instanceof Inet6Address)
+                                line = preEntry + preIPv6Entry + address.getHostAddress() + postEntry;
+                            else
+                                ErrorExit("Unknown address type");
+                            file.write(line.getBytes());
+                        }
+                        file.close();
+                        new File(fileName).delete();
+                        new File(fileName + ".tmp").renameTo(new File(fileName));
+                    } catch (IOException e) {
+                        ErrorExit(e);
+                    }
+                    try {
+                        Thread.sleep(60*1000);
+                    } catch (InterruptedException e) { ErrorExit(e); }
+                }
+            }
+        }.start();
     }
     
     private static void LaunchStatsPrinterThread() {
