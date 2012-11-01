@@ -259,9 +259,9 @@ public class Dnsseed {
                         if (printNodeCounts) {
                             System.out.println("Node counts by status:");
                             System.out.println(store.getStatus());
+                            System.out.println();
                         }
                     }
-                    System.out.println();
                     synchronized (peerToChannelMap) {
                         System.out.println("Current connections open/in progress: " + peerToChannelMap.size());
                     }
