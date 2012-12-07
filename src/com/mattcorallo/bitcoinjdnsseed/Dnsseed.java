@@ -244,7 +244,11 @@ public class Dnsseed {
                 "\t\t\t2419200\t\t; Expire\n" +
                 "\t\t\t    120 )\t; Negative Cache TTL\n" +
                 ";\n" +
-                "@\tIN\tNS\tdnsseedns.bluematt.me.\n";
+                "@\tIN\tNS\tdnsseedns.bluematt.me.\n" +
+                "@\tIN\tNS\tns2.he.net.\n" +
+                "@\tIN\tNS\tns3.he.net.\n" +
+                "@\tIN\tNS\tns4.he.net.\n" +
+                "@\tIN\tNS\tns5.he.net.\n";
         final String preEntry = "@\t60\tIN\t";
         final String preIPv4Entry = "A\t";
         final String preIPv6Entry = "AAAA\t";
@@ -420,7 +424,7 @@ public class Dnsseed {
         }.start();
     }
     
-    private static void InitPeerGroup(String localPeerAddress) throws BlockStoreException, UnknownHostException {
+    private static void InitPeerGroup(final String localPeerAddress) throws BlockStoreException, UnknownHostException {
         chain = new BlockChain(params, blockStore);
         peerGroup = new PeerGroup(params, chain, CONNECT_TIMEOUT*1000);
         peerGroup.setUserAgent("DNSSeed", ">9000");
@@ -428,9 +432,10 @@ public class Dnsseed {
         peerGroup.start();
         
         ChannelFuture channelFuture = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.port));
-        final Peer localPeer = PeerGroup.peerFromChannelFuture(channelFuture);
+        final Peer localPeerOutside = PeerGroup.peerFromChannelFuture(channelFuture);
         
         peerGroup.addEventListener(new AbstractPeerEventListener() {
+            Peer localPeer = localPeerOutside;
             @Override
             public void onPeerConnected(Peer peer, int peerCount) {
                 if (peer == localPeer) {
@@ -483,7 +488,14 @@ public class Dnsseed {
             @Override
             public void onPeerDisconnected(Peer peer, int peerCount) {
                 if (peer == localPeer) {
-                    ErrorExit("Local peer disconnected!");
+                    ChannelFuture channelFuture;
+                    try {
+                        channelFuture = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.port));
+                    } catch (UnknownHostException e) {
+                        ErrorExit("UnknownHostException trying to reconnect to localPeer");
+                        throw new RuntimeException(e);
+                    }
+                    localPeer = PeerGroup.peerFromChannelFuture(channelFuture);
                 }
                 AsyncUpdatePeer(peer, DataStore.PeerState.PEER_DISCONNECTED);
             }
