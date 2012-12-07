@@ -1,11 +1,8 @@
 package com.mattcorallo.bitcoinjdnsseed;
 
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.Inet4Address;
@@ -33,6 +30,7 @@ import org.jboss.netty.logging.Slf4JLoggerFactory;
 
 import com.google.bitcoin.core.AbstractPeerEventListener;
 import com.google.bitcoin.core.AddressMessage;
+import com.google.bitcoin.core.AlertMessage;
 import com.google.bitcoin.core.Block;
 import com.google.bitcoin.core.BlockChain;
 import com.google.bitcoin.core.GetBlocksMessage;
@@ -235,15 +233,16 @@ public class Dnsseed {
     }
     
     private static void LaunchDumpGoodAddressesThread(final String fileName) { // In BIND Zonefile format
-        final String introLine = "; dnsseed.bluematt.me\n" +
+        final String introLinePartOne = "; dnsseed.bluematt.me\n" +
                 ";\n" +
                 "$TTL\t86400\n" +
                 "@\tIN\tSOA\tdnsseedns.bluematt.me. dnsseed.bluematt.me. (\n" +
-                "\t\t\t      1         ; Serial\n" +
-                "\t\t\t 604800         ; Refresh\n" +
-                "\t\t\t  86400         ; Retry\n" +
-                "\t\t\t2419200         ; Expire\n" +
-                "\t\t\t  86400 )       ; Negative Cache TTL\n" +
+                "\t\t\t ";
+        final String introLinePartTwo = "\t\t; Serial\n" +
+                "\t\t\t 604800\t\t; Refresh\n" +
+                "\t\t\t  86400\t\t; Retry\n" +
+                "\t\t\t2419200\t\t; Expire\n" +
+                "\t\t\t    120 )\t; Negative Cache TTL\n" +
                 ";\n" +
                 "@\tIN\tNS\tdnsseedns.bluematt.me.\n";
         final String preEntry = "@\t60\tIN\t";
@@ -253,9 +252,13 @@ public class Dnsseed {
         new Thread() {
             public void run() {
                 while (true) {
+                    int counter = 1;
                     try {
                         FileOutputStream file = new FileOutputStream(fileName + ".tmp");
-                        file.write(introLine.getBytes());
+                        file.write(introLinePartOne.getBytes());
+                        file.write(Integer.valueOf(counter).toString().getBytes());
+                        counter++;
+                        file.write(introLinePartTwo.getBytes());
                         // We grab the top 25 most recently tested nodes
                         for (InetAddress address : store.getMostRecentGoodNodes(25, params.port)) {
                             String line = null;
@@ -527,7 +530,8 @@ public class Dnsseed {
                     }
                     return null;
                 }
-                if (m instanceof Transaction)
+                // TODO: Verify that nodes send transactions/alerts properly
+                if (m instanceof Transaction || m instanceof AlertMessage)
                     return null;
                 return m;
             }

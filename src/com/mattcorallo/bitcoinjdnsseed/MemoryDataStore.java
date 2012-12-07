@@ -80,6 +80,10 @@ class LinkedList<Type extends FastSerializer> {
         return head;
     }
     
+    Node getTail() {
+        return tail;
+    }
+    
     public void writeTo(ObjectOutputStream s) throws IOException {
         // Write out size
         s.writeInt(count);
@@ -267,13 +271,13 @@ public class MemoryDataStore extends DataStore {
     public List<InetAddress> getMostRecentGoodNodes(int numNodes, int port) {
         synchronized (addressToStatusMap) {
             List<InetAddress> resultsList = new java.util.LinkedList<InetAddress>();
-            LinkedList<PeerAndLastUpdateTime>.Node temp = statusToAddressesMap[PeerState.GOOD.ordinal()].getHead();
+            LinkedList<PeerAndLastUpdateTime>.Node temp = statusToAddressesMap[PeerState.GOOD.ordinal()].getTail();
             while (temp != null) {
                 if (resultsList.size() >= numNodes)
                     break;
                 if (temp.object.address.getPort() == port)
                     resultsList.add(temp.object.address.getAddress());
-                temp = temp.next;
+                temp = temp.prev;
             }
             return resultsList;
         }
