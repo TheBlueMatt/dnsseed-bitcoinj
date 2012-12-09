@@ -98,8 +98,8 @@ public class Dnsseed {
      * @param args
      */
     public static void main(String[] args) throws Exception {
-        System.out.println("USAGE: Dnsseed datastore localPeerAddress");
-        if (args.length != 2)
+        System.out.println("USAGE: Dnsseed datastore localPeerAddress initialZoneFileSerial");
+        if (args.length != 3)
             System.exit(1);
         
         org.jboss.netty.logging.InternalLoggerFactory.setDefaultFactory(new Slf4JLoggerFactory());
@@ -128,7 +128,7 @@ public class Dnsseed {
         InitPeerGroup(args[1]);
         LaunchAddNodesThread();
         LaunchStatsPrinterThread();
-        LaunchDumpGoodAddressesThread(args[0] + "/nodes.dump");
+        LaunchDumpGoodAddressesThread(args[0] + "/nodes.dump", Integer.parseInt(args[2]));
         
         BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
         String line = reader.readLine();
@@ -232,7 +232,7 @@ public class Dnsseed {
         }
     }
     
-    private static void LaunchDumpGoodAddressesThread(final String fileName) { // In BIND Zonefile format
+    private static void LaunchDumpGoodAddressesThread(final String fileName, final int initialCounter) { // In BIND Zonefile format
         final String introLinePartOne = "; dnsseed.bluematt.me\n" +
                 ";\n" +
                 "$TTL\t86400\n" +
@@ -255,12 +255,12 @@ public class Dnsseed {
         final String postEntry = "\n";
         new Thread() {
             public void run() {
-                int counter = 1;
+                int counter = initialCounter;
                 while (true) {
                     try {
                         FileOutputStream file = new FileOutputStream(fileName + ".tmp");
                         file.write(introLinePartOne.getBytes());
-                        file.write(Integer.valueOf(counter).toString().getBytes());
+                        file.write(Integer.toString(counter).getBytes());
                         counter++;
                         file.write(introLinePartTwo.getBytes());
                         // We grab the top 25 most recently tested nodes
@@ -281,7 +281,7 @@ public class Dnsseed {
                         ErrorExit(e);
                     }
                     try {
-                        Thread.sleep(60*1000);
+                        Thread.sleep(120*1000);
                     } catch (InterruptedException e) { ErrorExit(e); }
                 }
             }
@@ -488,15 +488,22 @@ public class Dnsseed {
             @Override
             public void onPeerDisconnected(Peer peer, int peerCount) {
                 if (peer == localPeer) {
-                    ChannelFuture channelFuture;
-                    try {
-                        channelFuture = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.port));
-                    } catch (UnknownHostException e) {
-                        ErrorExit("UnknownHostException trying to reconnect to localPeer");
-                        throw new RuntimeException(e);
-                    }
-                    localPeer = PeerGroup.peerFromChannelFuture(channelFuture);
-                    LogLine("Reconnecting to local peer after onPeerDisconnected");
+                    new Thread(new Runnable() {
+                        public void run() {
+                            try {
+                                Thread.sleep(1000);
+                            } catch (InterruptedException e1) { }
+                            LogLine("Reconnecting to local peer after onPeerDisconnected");
+                            ChannelFuture channelFuture;
+                            try {
+                                channelFuture = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.port));
+                            } catch (UnknownHostException e) {
+                                ErrorExit("UnknownHostException trying to reconnect to localPeer");
+                                throw new RuntimeException(e);
+                            }
+                            localPeer = PeerGroup.peerFromChannelFuture(channelFuture);
+                        }
+                    }).start();
                 }
                 AsyncUpdatePeer(peer, DataStore.PeerState.PEER_DISCONNECTED);
             }
