@@ -255,8 +255,8 @@ public class Dnsseed {
         final String postEntry = "\n";
         new Thread() {
             public void run() {
+                int counter = 1;
                 while (true) {
-                    int counter = 1;
                     try {
                         FileOutputStream file = new FileOutputStream(fileName + ".tmp");
                         file.write(introLinePartOne.getBytes());
@@ -496,6 +496,7 @@ public class Dnsseed {
                         throw new RuntimeException(e);
                     }
                     localPeer = PeerGroup.peerFromChannelFuture(channelFuture);
+                    LogLine("Reconnecting to local peer after onPeerDisconnected");
                 }
                 AsyncUpdatePeer(peer, DataStore.PeerState.PEER_DISCONNECTED);
             }
