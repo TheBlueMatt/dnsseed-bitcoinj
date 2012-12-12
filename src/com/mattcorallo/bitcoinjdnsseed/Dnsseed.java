@@ -359,7 +359,7 @@ public class Dnsseed {
                     System.out.println("n: Enable/disable printing node counts");
                     System.out.print("\n\033[s"); // Save cursor position and provide a blank line before cursor
                     System.out.print("\033[;H\033[2K");
-                    System.out.println("Most recent log:");
+                    System.out.println("Most recent log (in reverse order):");
                     System.out.print("\033[u\033[1A"); // Restore cursor position and go up one line
                     synchronized (exitableLock) {
                         exitableSemaphore--;
