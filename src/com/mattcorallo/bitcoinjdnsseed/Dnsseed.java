@@ -90,6 +90,8 @@ public class Dnsseed {
     
     static final int MAX_BLOCKS_AHEAD = 25;
     
+    static final int DUMP_DATASTORE_PERIOD_SECONDS = 60 * 60 * 6; // Every 6 hours
+    
     // Timeout before we have the peer's version message (in seconds)
     static final int CONNECT_TIMEOUT = 5;
     
@@ -131,6 +133,7 @@ public class Dnsseed {
         LaunchAddNodesThread();
         LaunchStatsPrinterThread();
         LaunchDumpGoodAddressesThread(args[0] + "/nodes.dump");
+        LaunchBackupDataStoreThread();
         
         BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
         String line = reader.readLine();
@@ -267,6 +270,21 @@ public class Dnsseed {
                 }
             }
         }.start();
+    }
+    
+    private static void LaunchBackupDataStoreThread() {
+        new Thread(new Runnable() {
+            public void run() {
+                if (store instanceof MemoryDataStore) {
+                    ((MemoryDataStore)store).saveState();
+                }
+                try {
+                    Thread.sleep(1000 * DUMP_DATASTORE_PERIOD_SECONDS);
+                } catch (InterruptedException e) {
+                    ErrorExit(e);
+                }
+            }
+        }).start();
     }
     
     private static void LaunchStatsPrinterThread() {
