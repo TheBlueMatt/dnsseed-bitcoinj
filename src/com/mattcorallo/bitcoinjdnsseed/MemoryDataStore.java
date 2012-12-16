@@ -247,21 +247,23 @@ public class MemoryDataStore extends DataStore {
         }
         blockHashList.ensureCapacity(300000);
         storageFile = file;
-        
+
         //Kick off a thread to do the actual update processing
-        new Thread(new Runnable() {
+        new Thread() {
             public void run() {
-                synchronized(queueStateUpdates) {
-                    while (queueStateUpdates.size() < 1)
-                        try { queueStateUpdates.wait(); } catch (InterruptedException e) { Dnsseed.ErrorExit(e); }
-                    addressToStatusMapLock.lock();
-                    for (UpdateState update : queueStateUpdates) {
-                        update.runUpdate();
+                while (true) {
+                    synchronized (queueStateUpdates) {
+                        while (queueStateUpdates.size() < 1)
+                            try { queueStateUpdates.wait(); } catch (InterruptedException e) { Dnsseed.ErrorExit(e); }
+                        addressToStatusMapLock.lock();
+                        for (UpdateState update : queueStateUpdates) {
+                            update.runUpdate();
+                        }
+                        addressToStatusMapLock.unlock();
                     }
-                    addressToStatusMapLock.unlock();
                 }
             }
-        }).start();
+        }.start();
     }
     
     Lock addressToStatusMapLock = new ReentrantLock();
