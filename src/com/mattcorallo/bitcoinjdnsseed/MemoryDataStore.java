@@ -166,7 +166,7 @@ public class MemoryDataStore extends DataStore {
             this.wasGoodCutoff = wasGoodCutoff;
         }
         // Make sure we are holding addressToStatusMapLock!
-        public void runUpdate() {
+        public String runUpdate() {
             String logLine = null;
             PeerStateAndNode oldState = addressToStatusMap.get(addr);
             if (oldState == null || state != PeerState.UNTESTED) {
@@ -195,8 +195,7 @@ public class MemoryDataStore extends DataStore {
                 } else
                     addressToStatusMap.put(addr, new PeerStateAndNode(state, newNode));
             }
-            if (logLine != null)
-                Dnsseed.LogLine(logLine);
+            return logLine;
         }
     }
     Queue<UpdateState> queueStateUpdates = new java.util.LinkedList<UpdateState>();
@@ -251,16 +250,24 @@ public class MemoryDataStore extends DataStore {
         //Kick off a thread to do the actual update processing
         new Thread() {
             public void run() {
+                Queue<UpdateState> updates = new java.util.LinkedList<UpdateState>();
                 while (true) {
                     synchronized (queueStateUpdates) {
                         while (queueStateUpdates.size() < 1)
                             try { queueStateUpdates.wait(); } catch (InterruptedException e) { Dnsseed.ErrorExit(e); }
-                        addressToStatusMapLock.lock();
-                        for (UpdateState update : queueStateUpdates) {
-                            update.runUpdate();
-                        }
-                        addressToStatusMapLock.unlock();
+                        for (UpdateState update : queueStateUpdates)
+                            updates.add(update);
                     }
+                    Queue<String> logLines = new java.util.LinkedList<String>();
+                    addressToStatusMapLock.lock();
+                    for (UpdateState update : updates) {
+                        String logLine = update.runUpdate();
+                        if (logLine != null)
+                            logLines.add(logLine);
+                    }
+                    addressToStatusMapLock.unlock();
+                    for (String line : logLines)
+                        Dnsseed.LogLine(line);
                 }
             }
         }.start();
