@@ -11,6 +11,7 @@ import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Queue;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -154,6 +155,51 @@ public class MemoryDataStore extends DataStore {
             this.node = node;
         }
     }
+    
+    class UpdateState {
+        public InetSocketAddress addr;
+        public PeerState state;
+        public long wasGoodCutoff;
+        public UpdateState(InetSocketAddress addr, PeerState state, long wasGoodCutoff) {
+            this.addr = addr;
+            this.state = state;
+            this.wasGoodCutoff = wasGoodCutoff;
+        }
+        // Make sure we are holding addressToStatusMapLock!
+        public void runUpdate() {
+            String logLine = null;
+            PeerStateAndNode oldState = addressToStatusMap.get(addr);
+            if (oldState == null || state != PeerState.UNTESTED) {
+                boolean print = false;
+                if (oldState != null && oldState.state != PeerState.UNTESTED && oldState.state != PeerState.UNTESTABLE_ADDRESS)
+                    print = true;
+                else if (state != PeerState.UNTESTED && state != PeerState.PEER_DISCONNECTED && state != PeerState.TIMEOUT && state != PeerState.UNTESTABLE_ADDRESS)
+                    print = true;
+                else if (!addr.getAddress().toString().split("/")[0].equals("") && state != PeerState.UNTESTED && state != PeerState.UNTESTABLE_ADDRESS)
+                    print = true;
+                if (oldState != null && oldState.state == PeerState.WAS_GOOD && (state == PeerState.TIMEOUT_DURING_REQUEST || state == PeerState.TIMEOUT || state == PeerState.PEER_DISCONNECTED))
+                    print = false;
+                if (print && (oldState == null || oldState.state != state))
+                    logLine = (oldState != null ? ("Updated node " + addr.toString() + " state was " + oldState.state) :
+                        ("Added node " + addr.toString())) + " new state is " + state.name();
+                // Calculate last good time and check if we are WAS_GOOD
+                long lastGoodTime = state == PeerState.GOOD ? -1 : (oldState != null ? oldState.node.object.lastGoodTime : 0);
+                if (lastGoodTime > wasGoodCutoff)
+                    state = PeerState.WAS_GOOD;
+                LinkedList<PeerAndLastUpdateTime>.Node newNode = statusToAddressesMap[state.ordinal()].addToTail(new PeerAndLastUpdateTime(addr, lastGoodTime));
+                // Remove/Update
+                if (oldState != null) {
+                    statusToAddressesMap[oldState.state.ordinal()].remove(oldState.node);
+                    oldState.state = state;
+                    oldState.node = newNode;
+                } else
+                    addressToStatusMap.put(addr, new PeerStateAndNode(state, newNode));
+            }
+            if (logLine != null)
+                Dnsseed.LogLine(logLine);
+        }
+    }
+    Queue<UpdateState> queueStateUpdates = new java.util.LinkedList<UpdateState>();
         
     private String storageFile;
     
@@ -201,6 +247,21 @@ public class MemoryDataStore extends DataStore {
         }
         blockHashList.ensureCapacity(300000);
         storageFile = file;
+        
+        //Kick off a thread to do the actual update processing
+        new Thread(new Runnable() {
+            public void run() {
+                synchronized(queueStateUpdates) {
+                    while (queueStateUpdates.size() < 1)
+                        try { queueStateUpdates.wait(); } catch (InterruptedException e) { Dnsseed.ErrorExit(e); }
+                    addressToStatusMapLock.lock();
+                    for (UpdateState update : queueStateUpdates) {
+                        update.runUpdate();
+                    }
+                    addressToStatusMapLock.unlock();
+                }
+            }
+        }).start();
     }
     
     Lock addressToStatusMapLock = new ReentrantLock();
@@ -209,64 +270,37 @@ public class MemoryDataStore extends DataStore {
 
     @Override
     public void addUpdateNode(InetSocketAddress addr, PeerState state) {
-        if (state == DataStore.PeerState.WAS_GOOD)
+        if (state == PeerState.WAS_GOOD)
             Dnsseed.ErrorExit("addUpdateNode WAS_GOOD");
         long wasGoodCutoff;
         synchronized (retryTimesLock) {
             wasGoodCutoff = System.currentTimeMillis()/1000 - ageOfLastSuccessToRetryAsGood;
         }
-        String logLine = null;
-        addressToStatusMapLock.lock();
-        PeerStateAndNode oldState = addressToStatusMap.get(addr);
-        if (oldState == null || state != PeerState.UNTESTED) {
-            boolean print = false;
-            if (oldState != null && oldState.state != PeerState.UNTESTED && oldState.state != PeerState.UNTESTABLE_ADDRESS)
-                print = true;
-            else if (state != PeerState.UNTESTED && state != PeerState.PEER_DISCONNECTED && state != PeerState.TIMEOUT && state != PeerState.UNTESTABLE_ADDRESS)
-                print = true;
-            else if (!addr.getAddress().toString().split("/")[0].equals("") && state != PeerState.UNTESTED && state != PeerState.UNTESTABLE_ADDRESS)
-                print = true;
-            if (oldState != null && oldState.state == PeerState.WAS_GOOD && (state == PeerState.TIMEOUT_DURING_REQUEST || state == PeerState.TIMEOUT || state == PeerState.PEER_DISCONNECTED))
-                print = false;
-            if (print && (oldState == null || oldState.state != state))
-                logLine = (oldState != null ? ("Updated node " + addr.toString() + " state was " + oldState.state) :
-                    ("Added node " + addr.toString())) + " new state is " + state.name();
-            // Calculate last good time and check if we are WAS_GOOD
-            long lastGoodTime = state == PeerState.GOOD ? -1 : (oldState != null ? oldState.node.object.lastGoodTime : 0);
-            if (lastGoodTime > wasGoodCutoff)
-                state = PeerState.WAS_GOOD;
-            LinkedList<PeerAndLastUpdateTime>.Node newNode = statusToAddressesMap[state.ordinal()].addToTail(new PeerAndLastUpdateTime(addr, lastGoodTime));
-            // Remove/Update
-            if (oldState != null) {
-                statusToAddressesMap[oldState.state.ordinal()].remove(oldState.node);
-                oldState.state = state;
-                oldState.node = newNode;
-            } else
-                addressToStatusMap.put(addr, new PeerStateAndNode(state, newNode));
+        synchronized(queueStateUpdates) {
+            queueStateUpdates.add(new UpdateState(addr, state, wasGoodCutoff));
+            queueStateUpdates.notify();
         }
-        addressToStatusMapLock.unlock();
-        if (logLine != null)
-            Dnsseed.LogLine(logLine);
     }
 
     @Override
     public List<InetSocketAddress> getNodesToTest() {
-        addressToStatusMapLock.lock();
         List<InetSocketAddress> resultsList = new java.util.LinkedList<InetSocketAddress>();
-        for (PeerState state : PeerState.values()) {
-            LinkedList<PeerAndLastUpdateTime>.Node temp = statusToAddressesMap[state.ordinal()].getHead();
-            long targetMaxTime;
-            synchronized (retryTimesLock) {
-                targetMaxTime = System.currentTimeMillis()/1000 - retryTimes[state.ordinal()];
+        if (addressToStatusMapLock.tryLock()) {
+            for (PeerState state : PeerState.values()) {
+                LinkedList<PeerAndLastUpdateTime>.Node temp = statusToAddressesMap[state.ordinal()].getHead();
+                long targetMaxTime;
+                synchronized (retryTimesLock) {
+                    targetMaxTime = System.currentTimeMillis()/1000 - retryTimes[state.ordinal()];
+                }
+                while (temp != null) {
+                    if (temp.object.lastUpdateTime >= targetMaxTime)
+                        break;
+                    resultsList.add(temp.object.address);
+                    temp = temp.next;
+                }
             }
-            while (temp != null) {
-                if (temp.object.lastUpdateTime >= targetMaxTime)
-                    break;
-                resultsList.add(temp.object.address);
-                temp = temp.next;
-            }
+            addressToStatusMapLock.unlock();
         }
-        addressToStatusMapLock.unlock();
         return resultsList;
     }
     
