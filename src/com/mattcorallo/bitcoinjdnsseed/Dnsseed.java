@@ -100,8 +100,8 @@ public class Dnsseed {
      * @param args
      */
     public static void main(String[] args) throws Exception {
-        System.out.println("USAGE: Dnsseed datastore localPeerAddress initialZoneFileSerial");
-        if (args.length != 3)
+        System.out.println("USAGE: Dnsseed datastore localPeerAddress");
+        if (args.length != 2)
             System.exit(1);
         
         org.jboss.netty.logging.InternalLoggerFactory.setDefaultFactory(new Slf4JLoggerFactory());
@@ -130,7 +130,7 @@ public class Dnsseed {
         InitPeerGroup(args[1]);
         LaunchAddNodesThread();
         LaunchStatsPrinterThread();
-        LaunchDumpGoodAddressesThread(args[0] + "/nodes.dump", Integer.parseInt(args[2]));
+        LaunchDumpGoodAddressesThread(args[0] + "/nodes.dump");
         
         BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
         String line = reader.readLine();
@@ -234,37 +234,16 @@ public class Dnsseed {
         }
     }
     
-    private static void LaunchDumpGoodAddressesThread(final String fileName, final int initialCounter) { // In BIND Zonefile format
-        final String introLinePartOne = "; dnsseed.bluematt.me\n" +
-                ";\n" +
-                "$TTL\t86400\n" +
-                "@\tIN\tSOA\tdnsseedns.bluematt.me. dnsseed.bluematt.me. (\n" +
-                "\t\t\t ";
-        final String introLinePartTwo = "\t\t; Serial\n" +
-                "\t\t\t 604800\t\t; Refresh\n" +
-                "\t\t\t  86400\t\t; Retry\n" +
-                "\t\t\t2419200\t\t; Expire\n" +
-                "\t\t\t    120 )\t; Negative Cache TTL\n" +
-                ";\n" +
-                "@\tIN\tNS\tdnsseedns.bluematt.me.\n" +
-                "@\tIN\tNS\tns2.he.net.\n" +
-                "@\tIN\tNS\tns3.he.net.\n" +
-                "@\tIN\tNS\tns4.he.net.\n" +
-                "@\tIN\tNS\tns5.he.net.\n";
-        final String preEntry = "@\t60\tIN\t";
+    private static void LaunchDumpGoodAddressesThread(final String fileName) { // In partial BIND Zonefile format
+        final String preEntry = "@\tIN\t";
         final String preIPv4Entry = "A\t";
         final String preIPv6Entry = "AAAA\t";
         final String postEntry = "\n";
         new Thread() {
             public void run() {
-                int counter = initialCounter;
                 while (true) {
                     try {
                         FileOutputStream file = new FileOutputStream(fileName + ".tmp");
-                        file.write(introLinePartOne.getBytes());
-                        file.write(Integer.toString(counter).getBytes());
-                        counter++;
-                        file.write(introLinePartTwo.getBytes());
                         // We grab the top 25 most recently tested nodes
                         for (InetAddress address : store.getMostRecentGoodNodes(25, params.port)) {
                             String line = null;
