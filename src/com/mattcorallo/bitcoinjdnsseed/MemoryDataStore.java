@@ -11,6 +11,8 @@ import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 import com.google.bitcoin.core.Sha256Hash;
 
@@ -201,6 +203,7 @@ public class MemoryDataStore extends DataStore {
         storageFile = file;
     }
     
+    Lock addressToStatusMapLock = new ReentrantLock();
     private HashMap<InetSocketAddress, PeerStateAndNode> addressToStatusMap = new HashMap<InetSocketAddress, PeerStateAndNode>();
     private LinkedList<PeerAndLastUpdateTime>[] statusToAddressesMap = new LinkedList[PeerState.values().length];
 
@@ -213,95 +216,95 @@ public class MemoryDataStore extends DataStore {
             wasGoodCutoff = System.currentTimeMillis()/1000 - ageOfLastSuccessToRetryAsGood;
         }
         String logLine = null;
-        synchronized (addressToStatusMap) {
-            PeerStateAndNode oldState = addressToStatusMap.get(addr);
-            if (oldState == null || state != PeerState.UNTESTED) {
-                boolean print = false;
-                if (oldState != null && oldState.state != PeerState.UNTESTED && oldState.state != PeerState.UNTESTABLE_ADDRESS)
-                    print = true;
-                else if (state != PeerState.UNTESTED && state != PeerState.PEER_DISCONNECTED && state != PeerState.TIMEOUT && state != PeerState.UNTESTABLE_ADDRESS)
-                    print = true;
-                else if (!addr.getAddress().toString().split("/")[0].equals("") && state != PeerState.UNTESTED && state != PeerState.UNTESTABLE_ADDRESS)
-                    print = true;
-                if (oldState != null && oldState.state == PeerState.WAS_GOOD && (state == PeerState.TIMEOUT_DURING_REQUEST || state == PeerState.TIMEOUT || state == PeerState.PEER_DISCONNECTED))
-                    print = false;
-                if (print && (oldState == null || oldState.state != state))
-                    logLine = (oldState != null ? ("Updated node " + addr.toString() + " state was " + oldState.state) :
-                        ("Added node " + addr.toString())) + " new state is " + state.name();
-                // Calculate last good time and check if we are WAS_GOOD
-                long lastGoodTime = state == PeerState.GOOD ? -1 : (oldState != null ? oldState.node.object.lastGoodTime : 0);
-                if (lastGoodTime > wasGoodCutoff)
-                    state = PeerState.WAS_GOOD;
-                LinkedList<PeerAndLastUpdateTime>.Node newNode = statusToAddressesMap[state.ordinal()].addToTail(new PeerAndLastUpdateTime(addr, lastGoodTime));
-                // Remove/Update
-                if (oldState != null) {
-                    statusToAddressesMap[oldState.state.ordinal()].remove(oldState.node);
-                    oldState.state = state;
-                    oldState.node = newNode;
-                } else
-                    addressToStatusMap.put(addr, new PeerStateAndNode(state, newNode));
-            }
+        addressToStatusMapLock.lock();
+        PeerStateAndNode oldState = addressToStatusMap.get(addr);
+        if (oldState == null || state != PeerState.UNTESTED) {
+            boolean print = false;
+            if (oldState != null && oldState.state != PeerState.UNTESTED && oldState.state != PeerState.UNTESTABLE_ADDRESS)
+                print = true;
+            else if (state != PeerState.UNTESTED && state != PeerState.PEER_DISCONNECTED && state != PeerState.TIMEOUT && state != PeerState.UNTESTABLE_ADDRESS)
+                print = true;
+            else if (!addr.getAddress().toString().split("/")[0].equals("") && state != PeerState.UNTESTED && state != PeerState.UNTESTABLE_ADDRESS)
+                print = true;
+            if (oldState != null && oldState.state == PeerState.WAS_GOOD && (state == PeerState.TIMEOUT_DURING_REQUEST || state == PeerState.TIMEOUT || state == PeerState.PEER_DISCONNECTED))
+                print = false;
+            if (print && (oldState == null || oldState.state != state))
+                logLine = (oldState != null ? ("Updated node " + addr.toString() + " state was " + oldState.state) :
+                    ("Added node " + addr.toString())) + " new state is " + state.name();
+            // Calculate last good time and check if we are WAS_GOOD
+            long lastGoodTime = state == PeerState.GOOD ? -1 : (oldState != null ? oldState.node.object.lastGoodTime : 0);
+            if (lastGoodTime > wasGoodCutoff)
+                state = PeerState.WAS_GOOD;
+            LinkedList<PeerAndLastUpdateTime>.Node newNode = statusToAddressesMap[state.ordinal()].addToTail(new PeerAndLastUpdateTime(addr, lastGoodTime));
+            // Remove/Update
+            if (oldState != null) {
+                statusToAddressesMap[oldState.state.ordinal()].remove(oldState.node);
+                oldState.state = state;
+                oldState.node = newNode;
+            } else
+                addressToStatusMap.put(addr, new PeerStateAndNode(state, newNode));
         }
+        addressToStatusMapLock.unlock();
         if (logLine != null)
             Dnsseed.LogLine(logLine);
     }
 
     @Override
     public List<InetSocketAddress> getNodesToTest() {
-        synchronized (addressToStatusMap) {
-            List<InetSocketAddress> resultsList = new java.util.LinkedList<InetSocketAddress>();
-            for (PeerState state : PeerState.values()) {
-                LinkedList<PeerAndLastUpdateTime>.Node temp = statusToAddressesMap[state.ordinal()].getHead();
-                long targetMaxTime;
-                synchronized (retryTimesLock) {
-                    targetMaxTime = System.currentTimeMillis()/1000 - retryTimes[state.ordinal()];
-                }
-                while (temp != null) {
-                    if (temp.object.lastUpdateTime >= targetMaxTime)
-                        break;
-                    resultsList.add(temp.object.address);
-                    temp = temp.next;
-                }
+        addressToStatusMapLock.lock();
+        List<InetSocketAddress> resultsList = new java.util.LinkedList<InetSocketAddress>();
+        for (PeerState state : PeerState.values()) {
+            LinkedList<PeerAndLastUpdateTime>.Node temp = statusToAddressesMap[state.ordinal()].getHead();
+            long targetMaxTime;
+            synchronized (retryTimesLock) {
+                targetMaxTime = System.currentTimeMillis()/1000 - retryTimes[state.ordinal()];
             }
-            return resultsList;
+            while (temp != null) {
+                if (temp.object.lastUpdateTime >= targetMaxTime)
+                    break;
+                resultsList.add(temp.object.address);
+                temp = temp.next;
+            }
         }
+        addressToStatusMapLock.unlock();
+        return resultsList;
     }
     
     @Override
     public List<InetAddress> getMostRecentGoodNodes(int numNodes, int port) {
-        synchronized (addressToStatusMap) {
-            List<InetAddress> resultsList = new java.util.LinkedList<InetAddress>();
-            LinkedList<PeerAndLastUpdateTime>.Node temp = statusToAddressesMap[PeerState.GOOD.ordinal()].getTail();
-            while (temp != null) {
-                if (resultsList.size() >= numNodes)
-                    break;
-                if (temp.object.address.getPort() == port)
-                    resultsList.add(temp.object.address.getAddress());
-                temp = temp.prev;
-            }
-            return resultsList;
+        addressToStatusMapLock.lock();
+        List<InetAddress> resultsList = new java.util.LinkedList<InetAddress>();
+        LinkedList<PeerAndLastUpdateTime>.Node temp = statusToAddressesMap[PeerState.GOOD.ordinal()].getTail();
+        while (temp != null) {
+            if (resultsList.size() >= numNodes)
+                break;
+            if (temp.object.address.getPort() == port)
+                resultsList.add(temp.object.address.getAddress());
+            temp = temp.prev;
         }
+        addressToStatusMapLock.unlock();
+        return resultsList;
     }
     
     @Override
     public String getStatus() {
-        synchronized (addressToStatusMap) {
-            String states = "";
-            int total = 0;
-            for (PeerState state : PeerState.values()) {
-                states += state.name() + ": ";
-                for (int i = DataStore.PEER_STATE_MAX_LENGTH; i > state.name().length(); i--)
-                    states += " ";
-                int currentCount = statusToAddressesMap[state.ordinal()].getSize();
-                total += currentCount;
-                states += currentCount + "\n";
-            }
-            states += "Total: ";
-            for (int i = DataStore.PEER_STATE_MAX_LENGTH; i > 5; i--)
+        addressToStatusMapLock.lock();
+        String states = "";
+        int total = 0;
+        for (PeerState state : PeerState.values()) {
+            states += state.name() + ": ";
+            for (int i = DataStore.PEER_STATE_MAX_LENGTH; i > state.name().length(); i--)
                 states += " ";
-            states += total;
-            return states;
+            int currentCount = statusToAddressesMap[state.ordinal()].getSize();
+            total += currentCount;
+            states += currentCount + "\n";
         }
+        states += "Total: ";
+        for (int i = DataStore.PEER_STATE_MAX_LENGTH; i > 5; i--)
+            states += " ";
+        states += total;
+        addressToStatusMapLock.unlock();
+        return states;
     }
 
     ArrayList<Sha256Hash> blockHashList = new ArrayList<Sha256Hash>(300000);
@@ -343,10 +346,10 @@ public class MemoryDataStore extends DataStore {
         try {
             FileOutputStream outStream = new FileOutputStream(storageFile);
             ObjectOutputStream out = new ObjectOutputStream(outStream);
-            synchronized (addressToStatusMap) {
-                for (LinkedList<PeerAndLastUpdateTime> list : statusToAddressesMap)
-                    list.writeTo(out);
-            }
+            addressToStatusMapLock.lock();
+            for (LinkedList<PeerAndLastUpdateTime> list : statusToAddressesMap)
+                list.writeTo(out);
+            addressToStatusMapLock.unlock();
             synchronized (blockHashList) {
                 out.writeObject(blockHashList);
             }
