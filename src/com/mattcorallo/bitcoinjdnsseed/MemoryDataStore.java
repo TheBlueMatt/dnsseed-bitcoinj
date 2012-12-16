@@ -1,5 +1,6 @@
 package com.mattcorallo.bitcoinjdnsseed;
 
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
@@ -387,7 +388,7 @@ public class MemoryDataStore extends DataStore {
     
     public void saveState() {
         try {
-            FileOutputStream outStream = new FileOutputStream(storageFile);
+            FileOutputStream outStream = new FileOutputStream(storageFile + ".tmp");
             ObjectOutputStream out = new ObjectOutputStream(outStream);
             addressToStatusMapLock.lock();
             for (LinkedList<PeerAndLastUpdateTime> list : statusToAddressesMap)
@@ -409,6 +410,8 @@ public class MemoryDataStore extends DataStore {
             }
             out.close();
             outStream.close();
+            new File(storageFile).delete();
+            new File(storageFile + ".tmp").renameTo(new File(storageFile));
         } catch (Exception e) {
             Dnsseed.ErrorExit(e);
         }
