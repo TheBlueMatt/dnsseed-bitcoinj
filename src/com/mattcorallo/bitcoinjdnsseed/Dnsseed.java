@@ -120,12 +120,12 @@ public class Dnsseed {
             LogManager.getLogManager().getLogger(name).addHandler(fileHandlerAll);
         }
         
-        store = new MemoryDataStore(args[0] + "/memdatastore");
-        blockStore = new BoundedOverheadBlockStore(params, new File(args[0] + "/dnsseed.chain"));
         logFileStream = new FileOutputStream(args[0] + "/status.log");
-        
         for (int i = 0; i < 25; i++)
             logList.add(i, null);
+        
+        store = new MemoryDataStore(args[0] + "/memdatastore");
+        blockStore = new BoundedOverheadBlockStore(params, new File(args[0] + "/dnsseed.chain"));
         
         InitPeerGroup(args[1]);
         LaunchAddNodesThread();
