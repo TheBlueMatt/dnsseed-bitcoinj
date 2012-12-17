@@ -251,8 +251,8 @@ public class MemoryDataStore extends DataStore {
         //Kick off a thread to do the actual update processing
         new Thread() {
             public void run() {
-                Queue<UpdateState> updates = new java.util.LinkedList<UpdateState>();
                 while (true) {
+                    Queue<UpdateState> updates = new java.util.LinkedList<UpdateState>();
                     synchronized (queueStateUpdates) {
                         while (queueStateUpdates.size() < 1)
                             try { queueStateUpdates.wait(); } catch (InterruptedException e) { Dnsseed.ErrorExit(e); }
