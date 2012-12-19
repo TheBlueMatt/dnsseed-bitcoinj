@@ -205,7 +205,7 @@ public class MemoryDataStore extends DataStore {
     
     public MemoryDataStore(String file) {
         try {
-            FileInputStream inStream = new FileInputStream(file);
+            FileInputStream inStream = new FileInputStream(file + ".nodes");
             ObjectInputStream in = new ObjectInputStream(inStream);
             for (PeerState state : PeerState.values()) {
                 statusToAddressesMap[state.ordinal()] = new LinkedList<PeerAndLastUpdateTime>();
@@ -216,6 +216,11 @@ public class MemoryDataStore extends DataStore {
                     tmp = tmp.next;
                 }
             }
+            in.close();
+            inStream.close();
+            
+            inStream = new FileInputStream(file + ".blocks");
+            in = new ObjectInputStream(inStream);
             blockHashList = (ArrayList<Sha256Hash>) in.readObject();
             int numNulls = 0;
             for (Sha256Hash hash : blockHashList) {
@@ -224,6 +229,7 @@ public class MemoryDataStore extends DataStore {
                 else
                     numNulls++;
             }
+            // The 0th hash will be null
             if (numNulls > 1 || blockHashList.get(0) != null)
                 Dnsseed.ErrorExit((numNulls-1) + " null hash(es) in MemoryDataStore");
             synchronized(retryTimesLock) {
@@ -252,22 +258,16 @@ public class MemoryDataStore extends DataStore {
         new Thread() {
             public void run() {
                 while (true) {
-                    Queue<UpdateState> updates = new java.util.LinkedList<UpdateState>();
+                    UpdateState update;
                     synchronized (queueStateUpdates) {
-                        while (queueStateUpdates.size() < 1)
+                        while (queueStateUpdates.isEmpty())
                             try { queueStateUpdates.wait(); } catch (InterruptedException e) { Dnsseed.ErrorExit(e); }
-                        for (UpdateState update : queueStateUpdates)
-                            updates.add(update);
+                        update = queueStateUpdates.poll();
                     }
-                    Queue<String> logLines = new java.util.LinkedList<String>();
                     addressToStatusMapLock.lock();
-                    for (UpdateState update : updates) {
-                        String logLine = update.runUpdate();
-                        if (logLine != null)
-                            logLines.add(logLine);
-                    }
+                    String line = update.runUpdate();
                     addressToStatusMapLock.unlock();
-                    for (String line : logLines)
+                    if (line != null)
                         Dnsseed.LogLine(line);
                 }
             }
@@ -386,14 +386,32 @@ public class MemoryDataStore extends DataStore {
         }
     }
     
-    public void saveState() {
+    public void saveNodesState() {
         try {
-            FileOutputStream outStream = new FileOutputStream(storageFile + ".tmp");
+            FileOutputStream outStream = new FileOutputStream(storageFile + ".nodes.tmp");
             ObjectOutputStream out = new ObjectOutputStream(outStream);
             addressToStatusMapLock.lock();
-            for (LinkedList<PeerAndLastUpdateTime> list : statusToAddressesMap)
-                list.writeTo(out);
-            addressToStatusMapLock.unlock();
+            try {
+                for (LinkedList<PeerAndLastUpdateTime> list : statusToAddressesMap)
+                    list.writeTo(out);
+            } finally {
+                addressToStatusMapLock.unlock();
+            }
+            out.close();
+            outStream.close();
+            new File(storageFile + ".nodes").delete();
+            new File(storageFile + ".nodes.tmp").renameTo(new File(storageFile + ".nodes"));
+        } catch (FileNotFoundException e) {
+            Dnsseed.ErrorExit(e);
+        } catch (IOException e) {
+            Dnsseed.ErrorExit(e);
+        }
+    }
+    
+    public void saveConfigAndBlocksState() {
+        try {
+            FileOutputStream outStream = new FileOutputStream(storageFile + ".blocks.tmp");
+            ObjectOutputStream out = new ObjectOutputStream(outStream);
             synchronized (blockHashList) {
                 out.writeObject(blockHashList);
             }
@@ -410,9 +428,11 @@ public class MemoryDataStore extends DataStore {
             }
             out.close();
             outStream.close();
-            new File(storageFile).delete();
-            new File(storageFile + ".tmp").renameTo(new File(storageFile));
-        } catch (Exception e) {
+            new File(storageFile + ".blocks").delete();
+            new File(storageFile + ".blocks.tmp").renameTo(new File(storageFile + ".blocks"));
+        } catch (FileNotFoundException e) {
+            Dnsseed.ErrorExit(e);
+        } catch (IOException e) {
             Dnsseed.ErrorExit(e);
         }
     }

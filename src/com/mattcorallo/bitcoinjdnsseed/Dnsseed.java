@@ -90,7 +90,8 @@ public class Dnsseed {
     
     static final int MAX_BLOCKS_AHEAD = 25;
     
-    static final int DUMP_DATASTORE_PERIOD_SECONDS = 60 * 60 * 6; // Every 6 hours
+    static final int DUMP_DATASTORE_PERIOD_SECONDS = 60; // Every minute
+    static final int DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER = 60 * 6; // Every 6 hours (DUMP_DATASTORE_PERIOD_SECONDS * DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER)
     
     // Timeout before we have the peer's version message (in seconds)
     static final int CONNECT_TIMEOUT = 5;
@@ -145,7 +146,8 @@ public class Dnsseed {
                         exitableLock.wait();
                     peerGroup.stop();
                     if (store instanceof MemoryDataStore) {
-                        ((MemoryDataStore)store).saveState();
+                        ((MemoryDataStore)store).saveNodesState();
+                        ((MemoryDataStore)store).saveConfigAndBlocksState();
                     }
                     logFileStream.close();
                     System.exit(0);
@@ -275,13 +277,17 @@ public class Dnsseed {
     private static void LaunchBackupDataStoreThread() {
         new Thread(new Runnable() {
             public void run() {
-                if (store instanceof MemoryDataStore) {
-                    ((MemoryDataStore)store).saveState();
-                }
-                try {
-                    Thread.sleep(1000 * DUMP_DATASTORE_PERIOD_SECONDS);
-                } catch (InterruptedException e) {
-                    ErrorExit(e);
+                for (int i = 0; true; i++) {
+                    if (store instanceof MemoryDataStore) {
+                        if (i % DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER == 0)
+                            ((MemoryDataStore) store).saveNodesState();
+                        ((MemoryDataStore) store).saveConfigAndBlocksState();
+                    }
+                    try {
+                        Thread.sleep(1000 * DUMP_DATASTORE_PERIOD_SECONDS);
+                    } catch (InterruptedException e) {
+                        ErrorExit(e);
+                    }
                 }
             }
         }).start();
@@ -566,7 +572,7 @@ public class Dnsseed {
                 try {
                     store.putHashAtHeight(blockStore.get(block.getHash()).getHeight(), block.getHash());
                 } catch (BlockStoreException e) {
-                    e.printStackTrace();
+                    Dnsseed.ErrorExit(e);
                 }
                 synchronized(exitableLock) {
                     exitableSemaphore--;
