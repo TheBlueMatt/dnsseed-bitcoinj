@@ -279,9 +279,16 @@ public class Dnsseed {
             public void run() {
                 for (int i = 0; true; i++) {
                     if (store instanceof MemoryDataStore) {
+                        synchronized (exitableLock) {
+                            exitableSemaphore++;
+                        }
                         if (i % DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER == 0)
                             ((MemoryDataStore) store).saveNodesState();
                         ((MemoryDataStore) store).saveConfigAndBlocksState();
+                        synchronized (exitableLock) {
+                            exitableSemaphore--;
+                            exitableLock.notifyAll();
+                        }
                     }
                     try {
                         Thread.sleep(1000 * DUMP_DATASTORE_PERIOD_SECONDS);
