@@ -90,8 +90,8 @@ public class Dnsseed {
     
     static final int MAX_BLOCKS_AHEAD = 25;
     
-    static final int DUMP_DATASTORE_PERIOD_SECONDS = 60; // Every minute
-    static final int DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER = 60 * 6; // Every 6 hours (DUMP_DATASTORE_PERIOD_SECONDS * DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER)
+    static final int DUMP_DATASTORE_PERIOD_SECONDS = 60 * 30; // Every 30 minutes
+    static final int DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER = 60 * 60 * 6 / DUMP_DATASTORE_PERIOD_SECONDS; // Every 6 hours (DUMP_DATASTORE_PERIOD_SECONDS * DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER)
     
     // Timeout before we have the peer's version message (in seconds)
     static final int CONNECT_TIMEOUT = 5;
@@ -127,8 +127,8 @@ public class Dnsseed {
         for (int i = 0; i < 25; i++)
             logList.add(i, null);
         
-        store = new MemoryDataStore(args[0] + "/memdatastore");
         blockStore = new BoundedOverheadBlockStore(params, new File(args[0] + "/dnsseed.chain"));
+        store = new MemoryDataStore(args[0] + "/memdatastore", blockStore);
         
         InitPeerGroup(args[1]);
         LaunchAddNodesThread();
@@ -277,23 +277,26 @@ public class Dnsseed {
     private static void LaunchBackupDataStoreThread() {
         new Thread(new Runnable() {
             public void run() {
-                for (int i = 0; true; i++) {
-                    if (store instanceof MemoryDataStore) {
+                if (store instanceof MemoryDataStore) {
+                    for (int i = 0; true; i++) {
                         synchronized (exitableLock) {
                             exitableSemaphore++;
                         }
-                        if (i % DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER == 0)
+                        if (i % DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER == 0) {
+                            LogLine("Saving DataStore nodes state.");
                             ((MemoryDataStore) store).saveNodesState();
+                        }
+                        LogLine("Saving DataStore blocks state.");
                         ((MemoryDataStore) store).saveConfigAndBlocksState();
                         synchronized (exitableLock) {
                             exitableSemaphore--;
                             exitableLock.notifyAll();
                         }
-                    }
-                    try {
-                        Thread.sleep(1000 * DUMP_DATASTORE_PERIOD_SECONDS);
-                    } catch (InterruptedException e) {
-                        ErrorExit(e);
+                        try {
+                            Thread.sleep(1000 * DUMP_DATASTORE_PERIOD_SECONDS);
+                        } catch (InterruptedException e) {
+                            ErrorExit(e);
+                        }
                     }
                 }
             }
@@ -444,7 +447,7 @@ public class Dnsseed {
     
     private static void InitPeerGroup(final String localPeerAddress) throws BlockStoreException, UnknownHostException {
         chain = new BlockChain(params, blockStore);
-        peerGroup = new PeerGroup(params, chain, CONNECT_TIMEOUT*1000);
+        peerGroup = new PeerGroup(params, chain, 0.0001);
         peerGroup.setUserAgent("DNSSeed", ">9000");
         peerGroup.setFastCatchupTimeSecs(Long.MAX_VALUE);
         peerGroup.start();
@@ -609,7 +612,7 @@ public class Dnsseed {
                     }
                     DnsDiscovery discovery = new DnsDiscovery(params);
                     try {
-                        for (InetSocketAddress addr : discovery.getPeers()) {
+                        for (InetSocketAddress addr : discovery.getPeers(10, TimeUnit.SECONDS)) {
                             store.addUpdateNode(addr, DataStore.PeerState.UNTESTED);
                         }
                     } catch (PeerDiscoveryException e) { }
@@ -677,32 +680,39 @@ public class Dnsseed {
     
     static ExecutorService disconnectPeerExecutor = Executors.newFixedThreadPool(1);
     private static void AsyncUpdatePeer(final Peer peer, final DataStore.PeerState newState) {
-        disconnectPeerExecutor.submit(new Runnable() {
-            public void run() {
-                final ChannelFutureAndProgress peerState;
-                synchronized(peerToChannelMap) {
-                    peerState = peerToChannelMap.remove(peer);
-                    peerToChannelMap.notify();
+        synchronized (disconnectPeerExecutor) {
+            disconnectPeerExecutor.submit(new Runnable() {
+                public void run() {
+                    final ChannelFutureAndProgress peerState;
+                    synchronized (peerToChannelMap) {
+                        peerState = peerToChannelMap.remove(peer);
+                        peerToChannelMap.notify();
+                    }
+                    if (peerState != null) {
+                        if (newState != null)
+                            peerState.timeoutState = newState;
+                        if (peerState.timeoutState != DataStore.PeerState.PEER_DISCONNECTED)
+                            peerState.channel.getChannel().close();
+                        store.addUpdateNode(
+                                peer.getAddress().toSocketAddress(),
+                                peerState.timeoutState);
+                    }
                 }
-                if (peerState != null) {
-                    if (newState != null)
-                        peerState.timeoutState = newState;
-                    if (peerState.timeoutState != DataStore.PeerState.PEER_DISCONNECTED)
-                        peerState.channel.getChannel().close();
-                    store.addUpdateNode(peer.getAddress().toSocketAddress(), peerState.timeoutState);
-                }
-            }
-        });
+            });
+        }
     }
     
     static ExecutorService addUpdateNodeExecutor = Executors.newFixedThreadPool(1);
     private static void AsyncAddUntestedNodes(final List<PeerAddress> addresses) {
-        addUpdateNodeExecutor.submit(new Runnable() {
-            public void run() {
-                for (PeerAddress address : addresses)
-                    store.addUpdateNode(address.toSocketAddress(), DataStore.PeerState.UNTESTED);
-            }
-        });
+        synchronized (addUpdateNodeExecutor) {
+            addUpdateNodeExecutor.submit(new Runnable() {
+                public void run() {
+                    for (PeerAddress address : addresses)
+                        store.addUpdateNode(address.toSocketAddress(),
+                                DataStore.PeerState.UNTESTED);
+                }
+            });
+        }
     }
     
     static int logFileCounter = 0;

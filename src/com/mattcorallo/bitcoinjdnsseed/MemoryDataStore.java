@@ -17,6 +17,8 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import com.google.bitcoin.core.Sha256Hash;
+import com.google.bitcoin.core.StoredBlock;
+import com.google.bitcoin.store.BlockStore;
 
 
 interface FastSerializer {
@@ -203,7 +205,7 @@ public class MemoryDataStore extends DataStore {
         
     private String storageFile;
     
-    public MemoryDataStore(String file) {
+    public MemoryDataStore(String file, BlockStore store) {
         try {
             FileInputStream inStream = new FileInputStream(file + ".nodes");
             ObjectInputStream in = new ObjectInputStream(inStream);
@@ -218,10 +220,26 @@ public class MemoryDataStore extends DataStore {
             }
             in.close();
             inStream.close();
-            
-            inStream = new FileInputStream(file + ".blocks");
-            in = new ObjectInputStream(inStream);
+        } catch (FileNotFoundException e) {
+            for (PeerState state : PeerState.values())
+                statusToAddressesMap[state.ordinal()] = new LinkedList<PeerAndLastUpdateTime>();
+        } catch (Exception e) {
+            Dnsseed.ErrorExit(e);
+        }
+        
+        try {
+            FileInputStream inStream = new FileInputStream(file + ".blocks");
+            ObjectInputStream in = new ObjectInputStream(inStream);
             blockHashList = (ArrayList<Sha256Hash>) in.readObject();
+            StoredBlock storedBlock = store.getChainHead();
+            for (int i = 0; i < 25 && storedBlock != null; i++) {
+                if (blockHashList.size() <= storedBlock.getHeight()) {
+                    while (blockHashList.size() <= storedBlock.getHeight())
+                        blockHashList.add(null);
+                }
+                blockHashList.set(storedBlock.getHeight(), storedBlock.getHeader().getHash());
+                storedBlock = storedBlock.getPrev(store);
+            }
             int numNulls = 0;
             for (Sha256Hash hash : blockHashList) {
                 if (hash != null)
@@ -246,8 +264,6 @@ public class MemoryDataStore extends DataStore {
             in.close();
             inStream.close();
         } catch (FileNotFoundException e) {
-            for (PeerState state : PeerState.values())
-                statusToAddressesMap[state.ordinal()] = new LinkedList<PeerAndLastUpdateTime>();
         } catch (Exception e) {
             Dnsseed.ErrorExit(e);
         }
