@@ -13,10 +13,8 @@ import java.net.UnknownHostException;
 import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.LinkedList;
-import java.util.NoSuchElementException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -319,15 +317,9 @@ public class Dnsseed {
                     System.out.print("\033[2J\033[;H");
                     System.out.println();
                     synchronized(logList) {
-                        Iterator<String> it = logList.descendingIterator();
-                        String line = it.next();
-                        while (line != null) {
-                            System.out.println(line);
-                            try {
-                                line = it.next();
-                            } catch (NoSuchElementException e) {
-                                break;
-                            }
+                        for (String line : logList) {
+                            if (line != null)
+                                System.out.println(line);
                         }
                     }
                     System.out.println();
