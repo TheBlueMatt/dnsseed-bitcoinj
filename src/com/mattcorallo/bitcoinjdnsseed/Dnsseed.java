@@ -77,8 +77,9 @@ public class Dnsseed {
     static Object scanLock = new Object();
     static boolean scanable = false;
     
-    static Object printNodeCountsLock = new Object();
+    static Object updateStatsLock = new Object();
     static boolean printNodeCounts = true;
+    static boolean refreshStats = true;
     
     static Object statusLock = new Object();
     static int numRoundsComplete = 0;
@@ -97,6 +98,27 @@ public class Dnsseed {
     static LinkedList<String> logList = new LinkedList<String>();
     static FileOutputStream logFileStream;
     
+    private static void PauseScanning() {
+        synchronized(scanLock) {
+            scanable = false;
+        }
+        synchronized(peerToChannelMap) {
+            while (!peerToChannelMap.isEmpty())
+                try {
+                    peerToChannelMap.wait();
+                } catch (InterruptedException e) {
+                    ErrorExit(e);
+                }
+        }
+    }
+    
+    private static void ContinueScanning() {
+        synchronized(scanLock) {
+            scanable = true;
+            scanLock.notifyAll();
+        }
+    }
+        
     /**
      * @param args
      */
@@ -136,12 +158,13 @@ public class Dnsseed {
         
         BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
         String line = reader.readLine();
-        while (true) {
+        while (line != null) {
             if (line.equals("q")) {
                 // Used to make sure block height -> hash mappings dont get out of sync with block db itself
                 synchronized (exitableLock) {
                     while (exitableSemaphore > 0)
                         exitableLock.wait();
+                    PauseScanning();
                     peerGroup.stop();
                     if (store instanceof MemoryDataStore) {
                         ((MemoryDataStore)store).saveNodesState();
@@ -201,8 +224,13 @@ public class Dnsseed {
                     }
                 }
             } else if (line.equals("n")) {
-                synchronized(printNodeCountsLock) {
+                synchronized(updateStatsLock) {
                     printNodeCounts = !printNodeCounts;
+                }
+            } else if (line.equals("p")) {
+                synchronized(updateStatsLock) {
+                    refreshStats = !refreshStats;
+                    updateStatsLock.notifyAll();
                 }
             } else {
                 LogLine("Invalid command/arguments");
@@ -277,23 +305,25 @@ public class Dnsseed {
             public void run() {
                 if (store instanceof MemoryDataStore) {
                     for (int i = 0; true; i++) {
+                        try {
+                            Thread.sleep(1000 * DUMP_DATASTORE_PERIOD_SECONDS);
+                        } catch (InterruptedException e) {
+                            ErrorExit(e);
+                        }
                         synchronized (exitableLock) {
                             exitableSemaphore++;
                         }
-                        if (i % DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER == 0) {
+                        PauseScanning();
+                        if (i % DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER == DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER - 1) {
                             LogLine("Saving DataStore nodes state.");
                             ((MemoryDataStore) store).saveNodesState();
                         }
                         LogLine("Saving DataStore blocks state.");
                         ((MemoryDataStore) store).saveConfigAndBlocksState();
+                        ContinueScanning();
                         synchronized (exitableLock) {
                             exitableSemaphore--;
                             exitableLock.notifyAll();
-                        }
-                        try {
-                            Thread.sleep(1000 * DUMP_DATASTORE_PERIOD_SECONDS);
-                        } catch (InterruptedException e) {
-                            ErrorExit(e);
                         }
                     }
                 }
@@ -323,7 +353,7 @@ public class Dnsseed {
                         }
                     }
                     System.out.println();
-                    synchronized(printNodeCountsLock) {
+                    synchronized(updateStatsLock) {
                         if (printNodeCounts) {
                             System.out.println("Node counts by status:");
                             System.out.println(store.getStatus());
@@ -362,6 +392,7 @@ public class Dnsseed {
                     System.out.println("c x: Change connections opened per second to x");
                     System.out.println("t x: Change full run timeout to x seconds");
                     System.out.println("n: Enable/disable printing node counts");
+                    System.out.println("p: Enable/disable updating these stats");
                     System.out.print("\n\033[s"); // Save cursor position and provide a blank line before cursor
                     System.out.print("\033[;H\033[2K");
                     System.out.println("Most recent log:");
@@ -372,6 +403,10 @@ public class Dnsseed {
                     }
                     try {
                         Thread.sleep(1000);
+                        synchronized(updateStatsLock) {
+                            while (!refreshStats)
+                                updateStatsLock.wait();
+                        }
                     } catch (InterruptedException e) {
                         ErrorExit(e);
                     }
@@ -439,7 +474,7 @@ public class Dnsseed {
     
     private static void InitPeerGroup(final String localPeerAddress) throws BlockStoreException, UnknownHostException {
         chain = new BlockChain(params, blockStore);
-        peerGroup = new PeerGroup(params, chain, 0.0001);
+        peerGroup = new PeerGroup(params, chain);
         peerGroup.setUserAgent("DNSSeed", ">9000");
         peerGroup.setFastCatchupTimeSecs(Long.MAX_VALUE);
         peerGroup.start();
@@ -578,7 +613,7 @@ public class Dnsseed {
                 }
                 synchronized(exitableLock) {
                     exitableSemaphore--;
-                    exitableLock.notify();
+                    exitableLock.notifyAll();
                 }
                 if (blocksLeft <= 0)
                     StartScan(peer);
@@ -678,7 +713,7 @@ public class Dnsseed {
                     final ChannelFutureAndProgress peerState;
                     synchronized (peerToChannelMap) {
                         peerState = peerToChannelMap.remove(peer);
-                        peerToChannelMap.notify();
+                        peerToChannelMap.notifyAll();
                     }
                     if (peerState != null) {
                         if (newState != null)

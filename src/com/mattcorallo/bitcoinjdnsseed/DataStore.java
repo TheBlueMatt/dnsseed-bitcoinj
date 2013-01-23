@@ -42,7 +42,7 @@ public abstract class DataStore {
     public static final int PEER_STATE_MAX_LENGTH = 22;
     
     // Retry times in seconds
-    public Object retryTimesLock = new Object();
+    public final Object retryTimesLock = new Object();
     public int[] retryTimes = new int[PeerState.values().length];
     // Locked by retryTimesLock
     // If the node was GOOD within the last N minutes, retry as often as GOOD
