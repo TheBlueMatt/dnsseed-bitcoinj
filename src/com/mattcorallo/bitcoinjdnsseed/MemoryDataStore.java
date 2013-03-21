@@ -244,6 +244,9 @@ public class MemoryDataStore extends DataStore {
             synchronized(totalRunTimeoutLock) {
                 totalRunTimeout = in.readInt();
             }
+            synchronized(minVersionLock) {
+                minVersion = in.readInt();
+            }
             in.close();
             inStream.close();
         } catch (FileNotFoundException e) {
@@ -460,6 +463,9 @@ public class MemoryDataStore extends DataStore {
             }
             synchronized(totalRunTimeoutLock) {
                 out.writeInt(totalRunTimeout);
+            }
+            synchronized(minVersionLock) {
+                out.writeInt(minVersion);
             }
             out.close();
             outStream.close();

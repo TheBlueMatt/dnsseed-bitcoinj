@@ -58,6 +58,9 @@ public abstract class DataStore {
     // New connection opened per second
     public Object connectionsPerSecondLock = new Object();
     public int connectionsPerSecond = 5;
+    
+    public Object minVersionLock = new Object();
+    public int minVersion = 40000;
 
     public DataStore() {
         synchronized(retryTimesLock) {

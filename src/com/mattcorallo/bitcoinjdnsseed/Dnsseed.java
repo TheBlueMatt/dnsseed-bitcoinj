@@ -223,6 +223,17 @@ public class Dnsseed {
                         LogLine("Invalid argument");
                     }
                 }
+            } else if(line.length() >= 3 && line.charAt(0) == 'v' && line.charAt(1) == ' ') {
+                String[] values = line.split(" ");
+                if (values.length == 2) {
+                    try {
+                        synchronized(store.minVersionLock) {
+                            store.minVersion = Integer.parseInt(values[1]);
+                        }
+                    } catch (NumberFormatException e) {
+                        LogLine("Invalid argument");
+                    }
+                }
             } else if (line.equals("n")) {
                 synchronized(updateStatsLock) {
                     printNodeCounts = !printNodeCounts;
@@ -344,6 +355,10 @@ public class Dnsseed {
                     synchronized(store.totalRunTimeoutLock) {
                         totalRunTimeoutCache = store.totalRunTimeout;
                     }
+                    int minVersionCache;
+                    synchronized(store.minVersionLock) {
+                        minVersionCache = store.minVersion;
+                    }
                     System.out.print("\033[2J\033[;H");
                     System.out.println();
                     synchronized(logList) {
@@ -355,16 +370,17 @@ public class Dnsseed {
                     System.out.println();
                     synchronized(updateStatsLock) {
                         if (printNodeCounts) {
-                            System.out.println("Node counts by status:");
+                            System.out.println("Node counts by status (\"n\" to hide):");
                             System.out.println(store.getStatus());
                             System.out.println();
-                        }
+                        } else
+                            System.out.println("\"n\" to enable printing node counts by status");
                     }
                     synchronized (peerToChannelMap) {
                         System.out.println("Current connections open/in progress: " + peerToChannelMap.size());
                     }
                     synchronized (store.connectionsPerSecondLock) {
-                        System.out.println("Connections opened each second: " + store.connectionsPerSecond);
+                        System.out.println("Connections opened each second: " + store.connectionsPerSecond + " (\"c x\" to change value to x seconds)");
                     }
                     synchronized (statusLock) {
                         System.out.println("This round of scans: " + numScansCompletedThisRound + "/" + numScansThisRound +
@@ -372,7 +388,8 @@ public class Dnsseed {
                         //System.out.println("Number of rounds of scans completed: " + numRoundsComplete);
                     }
                     System.out.println("Current block count: " + chain.getBestChainHeight() + " == " + hashesStored);
-                    System.out.println("Timeout for full run (in seconds): " + totalRunTimeoutCache);
+                    System.out.println("Timeout for full run (in seconds): " + totalRunTimeoutCache + " (\"t x\" to change value to x seconds)");
+                    System.out.println("Minimum protocol version: " + minVersionCache + " (\"v x\" to change value to x)");
                     System.out.println();
                     System.out.println("Retry times (in minutes):");
                     synchronized (store.retryTimesLock) {
@@ -389,9 +406,6 @@ public class Dnsseed {
                     System.out.println("q: quit");
                     System.out.println("r x y: Change retry time for status x (int value, see retry times section for name mappings) to y (in hours)");
                     System.out.println("w x: Change the amount of time a node is considered WAS_GOOD after it fails to x (in hours)");
-                    System.out.println("c x: Change connections opened per second to x");
-                    System.out.println("t x: Change full run timeout to x seconds");
-                    System.out.println("n: Enable/disable printing node counts");
                     System.out.println("p: Enable/disable updating these stats");
                     System.out.print("\n\033[s"); // Save cursor position and provide a blank line before cursor
                     System.out.print("\033[;H\033[2K");
@@ -503,8 +517,10 @@ public class Dnsseed {
                 DataStore.PeerState disconnectReason = null;
                 if ((peer.getPeerVersionMessage().localServices & VersionMessage.NODE_NETWORK) != VersionMessage.NODE_NETWORK)
                     disconnectReason = DataStore.PeerState.NOT_FULL_NODE;
-                if (peer.getVersionMessage().clientVersion < 40000)
-                    disconnectReason = DataStore.PeerState.LOW_VERSION;
+                synchronized(store.minVersionLock) {
+                    if (peer.getPeerVersionMessage().clientVersion < store.minVersion)
+                        disconnectReason = DataStore.PeerState.LOW_VERSION;
+                }
                 if (peer.getBestHeight() < store.getMinBestHeight())
                     disconnectReason = DataStore.PeerState.LOW_BLOCK_COUNT;
                 try {
@@ -517,19 +533,14 @@ public class Dnsseed {
                     AsyncUpdatePeer(peer, disconnectReason);
                     return;
                 }
-                try {
-                    peer.sendMessage(new GetAddrMessage(params));
-                    int targetHeight = store.getMinBestHeight();
-                    peer.sendMessage(new GetBlocksMessage(params, Arrays.asList(store.getHashAtHeight(targetHeight - 1)),
-                            store.getHashAtHeight(targetHeight + 1)));
-                    synchronized(peerToChannelMap) {
-                        ChannelFutureAndProgress peerState = peerToChannelMap.get(peer);
-                        peerState.targetHash = store.getHashAtHeight(targetHeight);;
-                        peerState.timeoutState = DataStore.PeerState.TIMEOUT_DURING_REQUEST;
-                    }
-                } catch (IOException e) {
-                    AsyncUpdatePeer(peer, DataStore.PeerState.PEER_DISCONNECTED);
-                    throw new RuntimeException(e);
+                peer.sendMessage(new GetAddrMessage(params));
+                int targetHeight = store.getMinBestHeight();
+                peer.sendMessage(new GetBlocksMessage(params, Arrays.asList(store.getHashAtHeight(targetHeight - 1)),
+                        store.getHashAtHeight(targetHeight + 1)));
+                synchronized(peerToChannelMap) {
+                    ChannelFutureAndProgress peerState = peerToChannelMap.get(peer);
+                    peerState.targetHash = store.getHashAtHeight(targetHeight);;
+                    peerState.timeoutState = DataStore.PeerState.TIMEOUT_DURING_REQUEST;
                 }
             }
             
@@ -573,28 +584,24 @@ public class Dnsseed {
                     return m;
                 }
                 if (m instanceof Block || m instanceof InventoryMessage) {
-                    try {
-                        ChannelFutureAndProgress peerState;
-                        synchronized(peerToChannelMap) {
-                            peerState = peerToChannelMap.get(peer);
-                        }
-                        if (peerState == null)
-                            return null;
-                        if (m instanceof InventoryMessage && !peerState.hasAskedForBlocks) {
-                            for(InventoryItem inv : ((InventoryMessage)m).getItems()) {
-                                if (inv.type == InventoryItem.Type.Block && inv.hash.equals(peerState.targetHash)) {
-                                    GetDataMessage getdata = new GetDataMessage(params);
-                                    getdata.addItem(inv);
-                                    peer.sendMessage(getdata);
-                                    peerState.hasAskedForBlocks = true;
-                                    break;
-                                }
+                    ChannelFutureAndProgress peerState;
+                    synchronized(peerToChannelMap) {
+                        peerState = peerToChannelMap.get(peer);
+                    }
+                    if (peerState == null)
+                        return null;
+                    if (m instanceof InventoryMessage && !peerState.hasAskedForBlocks) {
+                        for(InventoryItem inv : ((InventoryMessage)m).getItems()) {
+                            if (inv.type == InventoryItem.Type.Block && inv.hash.equals(peerState.targetHash)) {
+                                GetDataMessage getdata = new GetDataMessage(params);
+                                getdata.addItem(inv);
+                                peer.sendMessage(getdata);
+                                peerState.hasAskedForBlocks = true;
+                                break;
                             }
-                        } else if (m instanceof Block && ((Block)m).getHash().equals(peerState.targetHash)) {
-                            PeerPassedBlockDownloadVerification(peer);
                         }
-                    } catch (IOException e) {
-                        AsyncUpdatePeer(peer, DataStore.PeerState.PEER_DISCONNECTED);
+                    } else if (m instanceof Block && ((Block)m).getHash().equals(peerState.targetHash)) {
+                        PeerPassedBlockDownloadVerification(peer);
                     }
                     return null;
                 }
@@ -632,11 +639,7 @@ public class Dnsseed {
         new Thread(new Runnable() {
             public void run() {
                 while (true) {
-                    try {
-                        localPeer.sendMessage(new GetAddrMessage(params));
-                    } catch (IOException e) {
-                        ErrorExit(e);
-                    }
+                    localPeer.sendMessage(new GetAddrMessage(params));
                     DnsDiscovery discovery = new DnsDiscovery(params);
                     try {
                         for (InetSocketAddress addr : discovery.getPeers(10, TimeUnit.SECONDS)) {
