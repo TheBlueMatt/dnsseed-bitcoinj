@@ -490,7 +490,8 @@ public class Dnsseed {
         chain = new BlockChain(params, blockStore);
         peerGroup = new PeerGroup(params, chain);
         peerGroup.setUserAgent("DNSSeed", ">9000");
-        peerGroup.setFastCatchupTimeSecs(Long.MAX_VALUE);
+        peerGroup.setFastCatchupTimeSecs(System.currentTimeMillis() / 1000 - 60*60);
+        peerGroup.setDownloadBlocks(false);
         peerGroup.start();
         
         ChannelFuture channelFuture = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.port));
