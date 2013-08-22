@@ -25,9 +25,6 @@ import java.util.logging.Level;
 import java.util.logging.LogManager;
 import java.util.logging.SimpleFormatter;
 
-import org.jboss.netty.channel.ChannelFuture;
-import org.jboss.netty.logging.Slf4JLoggerFactory;
-
 import com.google.bitcoin.core.AbstractPeerEventListener;
 import com.google.bitcoin.core.AddressMessage;
 import com.google.bitcoin.core.AlertMessage;
@@ -50,20 +47,21 @@ import com.google.bitcoin.discovery.DnsDiscovery;
 import com.google.bitcoin.discovery.PeerDiscoveryException;
 import com.google.bitcoin.store.BlockStore;
 import com.google.bitcoin.store.BlockStoreException;
-import com.google.bitcoin.store.BoundedOverheadBlockStore;
+import com.google.bitcoin.store.SPVBlockStore;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.MoreExecutors;
 
 public class Dnsseed {
     static class ChannelFutureAndProgress {
-        public ChannelFuture channel;
         public Sha256Hash targetHash;
         public boolean hasReceivedAddressMessage = false;
         public boolean hasPassedBlockDownloadTest = false;
         public boolean hasAskedForBlocks = false;
         public boolean hasPassed = false;
         public DataStore.PeerState timeoutState = DataStore.PeerState.TIMEOUT;
-        ChannelFutureAndProgress(ChannelFuture channel) { this.channel = channel; }
     }
-    static HashMap<Peer, ChannelFutureAndProgress> peerToChannelMap = new HashMap<Peer, ChannelFutureAndProgress>();
+    static final HashMap<Peer, ChannelFutureAndProgress> peerToChannelMap = new HashMap<Peer, ChannelFutureAndProgress>();
     static PeerGroup peerGroup;
     static final NetworkParameters params = NetworkParameters.prodNet();
     static DataStore store;
@@ -71,17 +69,17 @@ public class Dnsseed {
     static BlockStore blockStore;
     static BlockChain chain;
     
-    static Object exitableLock = new Object();
+    static final Object exitableLock = new Object();
     static int exitableSemaphore = 0;
     
-    static Object scanLock = new Object();
+    static final Object scanLock = new Object();
     static boolean scanable = false;
     
-    static Object updateStatsLock = new Object();
+    static final Object updateStatsLock = new Object();
     static boolean printNodeCounts = true;
     static boolean refreshStats = true;
     
-    static Object statusLock = new Object();
+    static final Object statusLock = new Object();
     static int numRoundsComplete = 0;
     static int numScansThisRound = 0;
     static int numScansCompletedThisRound = 0;
@@ -92,10 +90,7 @@ public class Dnsseed {
     static final int DUMP_DATASTORE_PERIOD_SECONDS = 60 * 30; // Every 30 minutes
     static final int DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER = 60 * 60 * 6 / DUMP_DATASTORE_PERIOD_SECONDS; // Every 6 hours (DUMP_DATASTORE_PERIOD_SECONDS * DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER)
     
-    // Timeout before we have the peer's version message (in seconds)
-    static final int CONNECT_TIMEOUT = 5;
-    
-    static LinkedList<String> logList = new LinkedList<String>();
+    static final LinkedList<String> logList = new LinkedList<String>();
     static FileOutputStream logFileStream;
     
     private static void PauseScanning() {
@@ -126,9 +121,7 @@ public class Dnsseed {
         System.out.println("USAGE: Dnsseed datastore localPeerAddress");
         if (args.length != 2)
             System.exit(1);
-        
-        org.jboss.netty.logging.InternalLoggerFactory.setDefaultFactory(new Slf4JLoggerFactory());
-        
+
         Handler fileHandlerWarn = new FileHandler(args[0] + "/warn.log");
         fileHandlerWarn.setLevel(Level.WARNING);
         fileHandlerWarn.setFormatter(new SimpleFormatter());
@@ -147,7 +140,7 @@ public class Dnsseed {
         for (int i = 0; i < 25; i++)
             logList.add(i, null);
         
-        blockStore = new BoundedOverheadBlockStore(params, new File(args[0] + "/dnsseed.chain"));
+        blockStore = new SPVBlockStore(params, new File(args[0] + "/dnsseed.chain"));
         store = new MemoryDataStore(args[0] + "/memdatastore", blockStore);
         
         InitPeerGroup(args[1]);
@@ -287,7 +280,7 @@ public class Dnsseed {
                     try {
                         FileOutputStream file = new FileOutputStream(fileName + ".tmp");
                         // We grab the top 25 most recently tested nodes
-                        for (InetAddress address : store.getMostRecentGoodNodes(25, params.port)) {
+                        for (InetAddress address : store.getMostRecentGoodNodes(25, params.getPort())) {
                             String line = null;
                             if (address instanceof Inet4Address)
                                 line = preEntry + preIPv4Entry + address.getHostAddress() + postEntry;
@@ -488,15 +481,17 @@ public class Dnsseed {
     
     private static void InitPeerGroup(final String localPeerAddress) throws BlockStoreException, UnknownHostException {
         chain = new BlockChain(params, blockStore);
-        peerGroup = new PeerGroup(params, chain);
+        peerGroup = new PeerGroup(params, chain) {
+            @Override
+            protected Peer selectDownloadPeer(List<Peer> peers) {
+                return null;
+            }
+        };
         peerGroup.setUserAgent("DNSSeed", ">9000");
-        peerGroup.setFastCatchupTimeSecs(System.currentTimeMillis() / 1000 - 60*60);
-        peerGroup.setDownloadBlocks(false);
         peerGroup.start();
         
-        ChannelFuture channelFuture = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.port));
-        final Peer localPeerOutside = PeerGroup.peerFromChannelFuture(channelFuture);
-        
+        final Peer localPeerOutside = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.getPort()));
+
         peerGroup.addEventListener(new AbstractPeerEventListener() {
             Peer localPeer = localPeerOutside;
             @Override
@@ -505,6 +500,7 @@ public class Dnsseed {
                     if (peer.getBestHeight() == chain.getBestChainHeight())
                         StartScan(peer);
                     try {
+                        peer.setDownloadParameters(System.currentTimeMillis() / 1000 - 60*60, false);
                         peer.startBlockChainDownload();
                     } catch (IOException e) {
                         ErrorExit(e);
@@ -534,13 +530,18 @@ public class Dnsseed {
                     AsyncUpdatePeer(peer, disconnectReason);
                     return;
                 }
-                peer.sendMessage(new GetAddrMessage(params));
-                int targetHeight = store.getMinBestHeight();
-                peer.sendMessage(new GetBlocksMessage(params, Arrays.asList(store.getHashAtHeight(targetHeight - 1)),
-                        store.getHashAtHeight(targetHeight + 1)));
+                int targetHeight = 0;
+                try {
+                    peer.sendMessage(new GetAddrMessage(params));
+                    targetHeight = store.getMinBestHeight();
+                    peer.sendMessage(new GetBlocksMessage(params, Arrays.asList(store.getHashAtHeight(targetHeight - 1)),
+                            store.getHashAtHeight(targetHeight + 1)));
+                } catch (IOException e) {
+                    peer.close();
+                }
                 synchronized(peerToChannelMap) {
                     ChannelFutureAndProgress peerState = peerToChannelMap.get(peer);
-                    peerState.targetHash = store.getHashAtHeight(targetHeight);;
+                    peerState.targetHash = store.getHashAtHeight(targetHeight);
                     peerState.timeoutState = DataStore.PeerState.TIMEOUT_DURING_REQUEST;
                 }
             }
@@ -554,14 +555,12 @@ public class Dnsseed {
                                 Thread.sleep(1000);
                             } catch (InterruptedException e1) { }
                             LogLine("Reconnecting to local peer after onPeerDisconnected");
-                            ChannelFuture channelFuture;
                             try {
-                                channelFuture = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.port));
+                                localPeer = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.getPort()));
                             } catch (UnknownHostException e) {
                                 ErrorExit("UnknownHostException trying to reconnect to localPeer");
                                 throw new RuntimeException(e);
                             }
-                            localPeer = PeerGroup.peerFromChannelFuture(channelFuture);
                         }
                     }).start();
                 }
@@ -596,7 +595,11 @@ public class Dnsseed {
                             if (inv.type == InventoryItem.Type.Block && inv.hash.equals(peerState.targetHash)) {
                                 GetDataMessage getdata = new GetDataMessage(params);
                                 getdata.addItem(inv);
-                                peer.sendMessage(getdata);
+                                try {
+                                    peer.sendMessage(getdata);
+                                } catch (IOException e) {
+                                    peer.close();
+                                }
                                 peerState.hasAskedForBlocks = true;
                                 break;
                             }
@@ -640,7 +643,11 @@ public class Dnsseed {
         new Thread(new Runnable() {
             public void run() {
                 while (true) {
-                    localPeer.sendMessage(new GetAddrMessage(params));
+                    try {
+                        localPeer.sendMessage(new GetAddrMessage(params));
+                    } catch (IOException e) {
+                        localPeer.close();
+                    }
                     DnsDiscovery discovery = new DnsDiscovery(params);
                     try {
                         for (InetSocketAddress addr : discovery.getPeers(10, TimeUnit.SECONDS)) {
@@ -665,13 +672,12 @@ public class Dnsseed {
                     ErrorExit(e);
                 }
         }
-        
-        ChannelFuture channelFuture = peerGroup.connectTo(address);
-        final Peer peer = PeerGroup.peerFromChannelFuture(channelFuture);
+
+        final Peer peer = peerGroup.connectTo(address);
         synchronized(peerToChannelMap) {
-            peerToChannelMap.put(peer, new ChannelFutureAndProgress(channelFuture));
+            peerToChannelMap.put(peer, new ChannelFutureAndProgress());
         }
-        
+
         synchronized (store.totalRunTimeoutLock) {
             nodeTimeoutExecutor.schedule(new Runnable() {
                 public void run() {
@@ -709,7 +715,7 @@ public class Dnsseed {
         }
     }
     
-    static ExecutorService disconnectPeerExecutor = Executors.newFixedThreadPool(1);
+    static final ExecutorService disconnectPeerExecutor = Executors.newFixedThreadPool(1);
     private static void AsyncUpdatePeer(final Peer peer, final DataStore.PeerState newState) {
         synchronized (disconnectPeerExecutor) {
             disconnectPeerExecutor.submit(new Runnable() {
@@ -723,7 +729,7 @@ public class Dnsseed {
                         if (newState != null)
                             peerState.timeoutState = newState;
                         if (peerState.timeoutState != DataStore.PeerState.PEER_DISCONNECTED)
-                            peerState.channel.getChannel().close();
+                            peer.close();
                         store.addUpdateNode(
                                 peer.getAddress().toSocketAddress(),
                                 peerState.timeoutState);
@@ -733,7 +739,7 @@ public class Dnsseed {
         }
     }
     
-    static ExecutorService addUpdateNodeExecutor = Executors.newFixedThreadPool(1);
+    static final ExecutorService addUpdateNodeExecutor = Executors.newFixedThreadPool(1);
     private static void AsyncAddUntestedNodes(final List<PeerAddress> addresses) {
         synchronized (addUpdateNodeExecutor) {
             addUpdateNodeExecutor.submit(new Runnable() {

@@ -52,14 +52,14 @@ public abstract class DataStore {
     static final int MIN_BLOCK_OFFSET = 50;
     
     // Timeout is measured from initial connect attempt until a single block has been fully received (in seconds)
-    public Object totalRunTimeoutLock = new Object();
+    public final Object totalRunTimeoutLock = new Object();
     public int totalRunTimeout = 10;
     
     // New connection opened per second
-    public Object connectionsPerSecondLock = new Object();
+    public final Object connectionsPerSecondLock = new Object();
     public int connectionsPerSecond = 5;
     
-    public Object minVersionLock = new Object();
+    public final Object minVersionLock = new Object();
     public int minVersion = 40000;
 
     public DataStore() {
