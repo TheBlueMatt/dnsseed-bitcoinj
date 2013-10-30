@@ -629,7 +629,7 @@ public class Dnsseed {
                 if (blocksLeft <= 0)
                     StartScan(peer);
             }
-        });
+        }, Threading.SAME_THREAD);
     }
     
     private static void StartScan(final Peer localPeer) {
