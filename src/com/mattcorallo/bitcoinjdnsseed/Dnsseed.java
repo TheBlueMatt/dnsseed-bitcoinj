@@ -48,6 +48,7 @@ import com.google.bitcoin.discovery.PeerDiscoveryException;
 import com.google.bitcoin.store.BlockStore;
 import com.google.bitcoin.store.BlockStoreException;
 import com.google.bitcoin.store.SPVBlockStore;
+import com.google.bitcoin.utils.Threading;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
@@ -297,7 +298,7 @@ public class Dnsseed {
                         ErrorExit(e);
                     }
                     try {
-                        Thread.sleep(120*1000);
+                        Thread.sleep(10*1000);
                     } catch (InterruptedException e) { ErrorExit(e); }
                 }
             }
@@ -488,7 +489,7 @@ public class Dnsseed {
             }
         };
         peerGroup.setUserAgent("DNSSeed", ">9000");
-        peerGroup.start();
+        peerGroup.startAndWait();
         
         final Peer localPeerOutside = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.getPort()));
 
@@ -673,17 +674,21 @@ public class Dnsseed {
                 }
         }
 
-        final Peer peer = peerGroup.connectTo(address);
-        synchronized(peerToChannelMap) {
-            peerToChannelMap.put(peer, new ChannelFutureAndProgress());
-        }
+        try {
+            final Peer peer = peerGroup.connectTo(address);
+            synchronized(peerToChannelMap) {
+                peerToChannelMap.put(peer, new ChannelFutureAndProgress());
+            }
 
-        synchronized (store.totalRunTimeoutLock) {
-            nodeTimeoutExecutor.schedule(new Runnable() {
-                public void run() {
-                    AsyncUpdatePeer(peer, null);
-                }
-            }, store.totalRunTimeout, TimeUnit.SECONDS);
+            synchronized (store.totalRunTimeoutLock) {
+                nodeTimeoutExecutor.schedule(new Runnable() {
+                    public void run() {
+                        AsyncUpdatePeer(peer, null);
+                    }
+                }, store.totalRunTimeout, TimeUnit.SECONDS);
+            }
+        } catch (Exception e) {
+            LogLine("Got error connecting to peer " + address + ": " + e.toString());
         }
     }
     
@@ -728,7 +733,7 @@ public class Dnsseed {
                     if (peerState != null) {
                         if (newState != null)
                             peerState.timeoutState = newState;
-                        if (peerState.timeoutState != DataStore.PeerState.PEER_DISCONNECTED)
+                        if (newState != DataStore.PeerState.PEER_DISCONNECTED)
                             peer.close();
                         store.addUpdateNode(
                                 peer.getAddress().toSocketAddress(),
