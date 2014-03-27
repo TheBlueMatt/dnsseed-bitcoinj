@@ -45,6 +45,8 @@ import com.google.bitcoin.core.Transaction;
 import com.google.bitcoin.core.VersionMessage;
 import com.google.bitcoin.discovery.DnsDiscovery;
 import com.google.bitcoin.discovery.PeerDiscoveryException;
+import com.google.bitcoin.net.discovery.DnsDiscovery;
+import com.google.bitcoin.net.discovery.PeerDiscoveryException;
 import com.google.bitcoin.store.BlockStore;
 import com.google.bitcoin.store.BlockStoreException;
 import com.google.bitcoin.store.SPVBlockStore;
@@ -69,31 +71,31 @@ public class Dnsseed {
     static File blockChainFile;
     static BlockStore blockStore;
     static BlockChain chain;
-    
+
     static final Object exitableLock = new Object();
     static int exitableSemaphore = 0;
-    
+
     static final Object scanLock = new Object();
     static boolean scanable = false;
-    
+
     static final Object updateStatsLock = new Object();
     static boolean printNodeCounts = true;
+    static boolean printTimeouts = true;
     static boolean refreshStats = true;
-    
+
     static final Object statusLock = new Object();
     static int numRoundsComplete = 0;
     static int numScansThisRound = 0;
     static int numScansCompletedThisRound = 0;
     static boolean isWaitingForEmptyPeerToStatusMap = false;
-    
+
     static final int MAX_BLOCKS_AHEAD = 25;
-    
+
     static final int DUMP_DATASTORE_PERIOD_SECONDS = 60 * 30; // Every 30 minutes
     static final int DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER = 60 * 60 * 6 / DUMP_DATASTORE_PERIOD_SECONDS; // Every 6 hours (DUMP_DATASTORE_PERIOD_SECONDS * DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER)
-    
+
     static final LinkedList<String> logList = new LinkedList<String>();
-    static FileOutputStream logFileStream;
-    
+
     private static void PauseScanning() {
         synchronized(scanLock) {
             scanable = false;
@@ -107,14 +109,14 @@ public class Dnsseed {
                 }
         }
     }
-    
+
     private static void ContinueScanning() {
         synchronized(scanLock) {
             scanable = true;
             scanLock.notifyAll();
         }
     }
-        
+
     /**
      * @param args
      */
@@ -123,33 +125,17 @@ public class Dnsseed {
         if (args.length != 2)
             System.exit(1);
 
-        Handler fileHandlerWarn = new FileHandler(args[0] + "/warn.log");
-        fileHandlerWarn.setLevel(Level.WARNING);
-        fileHandlerWarn.setFormatter(new SimpleFormatter());
-        Handler fileHandlerAll = new FileHandler(args[0] + "/full.log");
-        fileHandlerAll.setLevel(Level.ALL);
-        fileHandlerAll.setFormatter(new SimpleFormatter());
         LogManager.getLogManager().reset();
-        Enumeration<String> enumeration = LogManager.getLogManager().getLoggerNames();
-        while (enumeration.hasMoreElements()) {
-            String name = enumeration.nextElement();
-            LogManager.getLogManager().getLogger(name).addHandler(fileHandlerWarn);
-            LogManager.getLogManager().getLogger(name).addHandler(fileHandlerAll);
-        }
-        
-        logFileStream = new FileOutputStream(args[0] + "/status.log");
-        for (int i = 0; i < 25; i++)
-            logList.add(i, null);
-        
+
         blockStore = new SPVBlockStore(params, new File(args[0] + "/dnsseed.chain"));
         store = new MemoryDataStore(args[0] + "/memdatastore", blockStore);
-        
+
         InitPeerGroup(args[1]);
         LaunchAddNodesThread();
         LaunchStatsPrinterThread();
         LaunchDumpGoodAddressesThread(args[0] + "/nodes.dump");
         LaunchBackupDataStoreThread();
-        
+
         BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
         String line = reader.readLine();
         while (line != null) {
@@ -164,7 +150,6 @@ public class Dnsseed {
                         ((MemoryDataStore)store).saveNodesState();
                         ((MemoryDataStore)store).saveConfigAndBlocksState();
                     }
-                    logFileStream.close();
                     System.exit(0);
                 }
             } else if (line.length() >= 5 && line.charAt(0) == 'r' && line.charAt(1) == ' ') {
@@ -232,6 +217,10 @@ public class Dnsseed {
                 synchronized(updateStatsLock) {
                     printNodeCounts = !printNodeCounts;
                 }
+            } else if (line.equals("z")) {
+                synchronized(updateStatsLock) {
+                    printTimeouts = !printTimeouts;
+                }
             } else if (line.equals("p")) {
                 synchronized(updateStatsLock) {
                     refreshStats = !refreshStats;
@@ -247,7 +236,7 @@ public class Dnsseed {
     static void ErrorExit(String message) {
         ErrorExit(new Exception(message));
     }
-    
+
     static void ErrorExit(Exception exception) {
         synchronized (exitableLock) {
             while (exitableSemaphore > 0)
@@ -269,7 +258,7 @@ public class Dnsseed {
             System.exit(1);
         }
     }
-    
+
     private static void LaunchDumpGoodAddressesThread(final String fileName) { // In partial BIND Zonefile format
         final String preEntry = "@\tIN\t";
         final String preIPv4Entry = "A\t";
@@ -304,7 +293,7 @@ public class Dnsseed {
             }
         }.start();
     }
-    
+
     private static void LaunchBackupDataStoreThread() {
         new Thread(new Runnable() {
             public void run() {
@@ -335,7 +324,7 @@ public class Dnsseed {
             }
         }).start();
     }
-    
+
     private static void LaunchStatsPrinterThread() {
         new Thread() {
             public void run() {
@@ -385,15 +374,21 @@ public class Dnsseed {
                     System.out.println("Timeout for full run (in seconds): " + totalRunTimeoutCache + " (\"t x\" to change value to x seconds)");
                     System.out.println("Minimum protocol version: " + minVersionCache + " (\"v x\" to change value to x)");
                     System.out.println();
-                    System.out.println("Retry times (in minutes):");
-                    synchronized (store.retryTimesLock) {
-                        for (DataStore.PeerState state : DataStore.PeerState.values()) {
-                            System.out.print(state.name() + " (" + state.ordinal() + "): ");
-                            for (int i = DataStore.PEER_STATE_MAX_LENGTH - (state.ordinal() > 9 ? 1 : 0); i > state.name().length(); i--)
-                                System.out.print(" ");
-                            System.out.println(store.retryTimes[state.ordinal()] / 60);
+                    synchronized (updateStatsLock) {
+                        if (printTimeouts) {
+                            System.out.println("Retry times (in minutes) (\"z\" to hide):");
+                            synchronized (store.retryTimesLock) {
+                                for (DataStore.PeerState state : DataStore.PeerState.values()) {
+                                    System.out.print(state.name() + " (" + state.ordinal() + "): ");
+                                    for (int i = DataStore.PEER_STATE_MAX_LENGTH - (state.ordinal() > 9 ? 1 : 0); i > state.name().length(); i--)
+                                        System.out.print(" ");
+                                    System.out.println(store.retryTimes[state.ordinal()] / 60);
+                                }
+                                System.out.println("Consider a node WAS_GOOD after failure for " + (store.ageOfLastSuccessToRetryAsGood / 60) + " minutes (+1 update).");
+                            }
+                        } else {
+                            System.out.println("Retry times hidden \"z\" to show.");
                         }
-                        System.out.println("Consider a node WAS_GOOD after failure for " + (store.ageOfLastSuccessToRetryAsGood / 60) + " minutes (+1 update).");
                     }
                     System.out.println();
                     System.out.println("Commands:");
@@ -401,10 +396,10 @@ public class Dnsseed {
                     System.out.println("r x y: Change retry time for status x (int value, see retry times section for name mappings) to y (in hours)");
                     System.out.println("w x: Change the amount of time a node is considered WAS_GOOD after it fails to x (in hours)");
                     System.out.println("p: Enable/disable updating these stats");
-                    System.out.print("\n\033[s"); // Save cursor position and provide a blank line before cursor
+                    System.out.print("\033[s"); // Save cursor position and provide a blank line before cursor
                     System.out.print("\033[;H\033[2K");
                     System.out.println("Most recent log:");
-                    System.out.print("\033[u\033[1A"); // Restore cursor position and go up one line
+                    System.out.print("\033[u"); // Restore cursor position and go up one line
                     synchronized (exitableLock) {
                         exitableSemaphore--;
                         exitableLock.notifyAll();
@@ -422,7 +417,7 @@ public class Dnsseed {
             }
         }.start();
     }
-    
+
     private static void LaunchAddNodesThread() {
         new Thread() {
             public void run() {
@@ -479,7 +474,7 @@ public class Dnsseed {
             }
         }.start();
     }
-    
+
     private static void InitPeerGroup(final String localPeerAddress) throws BlockStoreException, UnknownHostException {
         chain = new BlockChain(params, blockStore);
         peerGroup = new PeerGroup(params, chain) {
@@ -490,7 +485,7 @@ public class Dnsseed {
         };
         peerGroup.setUserAgent("DNSSeed", ">9000");
         peerGroup.startAndWait();
-        
+
         final Peer localPeerOutside = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.getPort()));
 
         peerGroup.addEventListener(new AbstractPeerEventListener() {
@@ -500,12 +495,8 @@ public class Dnsseed {
                 if (peer == localPeer) {
                     if (peer.getBestHeight() == chain.getBestChainHeight())
                         StartScan(peer);
-                    try {
-                        peer.setDownloadParameters(System.currentTimeMillis() / 1000 - 60*60, false);
-                        peer.startBlockChainDownload();
-                    } catch (IOException e) {
-                        ErrorExit(e);
-                    }
+                    peer.setDownloadParameters(System.currentTimeMillis() / 1000 - 60*60, false);
+                    peer.startBlockChainDownload();
                     return;
                 }
                 synchronized(peerToChannelMap) {
@@ -532,21 +523,17 @@ public class Dnsseed {
                     return;
                 }
                 int targetHeight = 0;
-                try {
-                    peer.sendMessage(new GetAddrMessage(params));
-                    targetHeight = store.getMinBestHeight();
-                    peer.sendMessage(new GetBlocksMessage(params, Arrays.asList(store.getHashAtHeight(targetHeight - 1)),
-                            store.getHashAtHeight(targetHeight + 1)));
-                } catch (IOException e) {
-                    peer.close();
-                }
+                peer.sendMessage(new GetAddrMessage(params));
+                targetHeight = store.getMinBestHeight();
+                peer.sendMessage(new GetBlocksMessage(params, Arrays.asList(store.getHashAtHeight(targetHeight - 1)),
+                        store.getHashAtHeight(targetHeight + 1)));
                 synchronized(peerToChannelMap) {
                     ChannelFutureAndProgress peerState = peerToChannelMap.get(peer);
                     peerState.targetHash = store.getHashAtHeight(targetHeight);
                     peerState.timeoutState = DataStore.PeerState.TIMEOUT_DURING_REQUEST;
                 }
             }
-            
+
             @Override
             public void onPeerDisconnected(Peer peer, int peerCount) {
                 if (peer == localPeer) {
@@ -567,7 +554,7 @@ public class Dnsseed {
                 }
                 AsyncUpdatePeer(peer, DataStore.PeerState.PEER_DISCONNECTED);
             }
-            
+
             @Override
             public Message onPreMessageReceived(Peer peer, Message m) {
                 if (m instanceof AddressMessage) {
@@ -596,11 +583,7 @@ public class Dnsseed {
                             if (inv.type == InventoryItem.Type.Block && inv.hash.equals(peerState.targetHash)) {
                                 GetDataMessage getdata = new GetDataMessage(params);
                                 getdata.addItem(inv);
-                                try {
-                                    peer.sendMessage(getdata);
-                                } catch (IOException e) {
-                                    peer.close();
-                                }
+                                peer.sendMessage(getdata);
                                 peerState.hasAskedForBlocks = true;
                                 break;
                             }
@@ -615,7 +598,7 @@ public class Dnsseed {
                     return null;
                 return m;
             }
-            
+
             @Override
             public void onBlocksDownloaded(Peer peer, Block block, int blocksLeft) {
                 try {
@@ -632,7 +615,7 @@ public class Dnsseed {
             }
         }, Threading.SAME_THREAD);
     }
-    
+
     private static void StartScan(final Peer localPeer) {
         synchronized(scanLock) {
             if (scanable)
@@ -640,15 +623,11 @@ public class Dnsseed {
             scanable = true;
             scanLock.notifyAll();
         }
-        
+
         new Thread(new Runnable() {
             public void run() {
                 while (true) {
-                    try {
-                        localPeer.sendMessage(new GetAddrMessage(params));
-                    } catch (IOException e) {
-                        localPeer.close();
-                    }
+                    localPeer.sendMessage(new GetAddrMessage(params));
                     DnsDiscovery discovery = new DnsDiscovery(params);
                     try {
                         for (InetSocketAddress addr : discovery.getPeers(10, TimeUnit.SECONDS)) {
@@ -662,7 +641,7 @@ public class Dnsseed {
             }
         }).start();
     }
-    
+
     static ScheduledThreadPoolExecutor nodeTimeoutExecutor = new ScheduledThreadPoolExecutor(1);
     private static void ScanHost(InetSocketAddress address) {
         synchronized(scanLock) {
@@ -691,7 +670,7 @@ public class Dnsseed {
             LogLine("Got error connecting to peer " + address + ": " + e.toString());
         }
     }
-    
+
     private static void PeerPassedBlockDownloadVerification(Peer peer) {
         ChannelFutureAndProgress peerState;
         synchronized(peerToChannelMap) {
@@ -705,7 +684,7 @@ public class Dnsseed {
             }
         }
     }
-    
+
     private static void PeerProvidedAddressMessage(Peer peer) {
         ChannelFutureAndProgress peerState;
         synchronized(peerToChannelMap) {
@@ -719,7 +698,7 @@ public class Dnsseed {
             }
         }
     }
-    
+
     static final ExecutorService disconnectPeerExecutor = Executors.newFixedThreadPool(1);
     private static void AsyncUpdatePeer(final Peer peer, final DataStore.PeerState newState) {
         synchronized (disconnectPeerExecutor) {
@@ -743,7 +722,7 @@ public class Dnsseed {
             });
         }
     }
-    
+
     static final ExecutorService addUpdateNodeExecutor = Executors.newFixedThreadPool(1);
     private static void AsyncAddUntestedNodes(final List<PeerAddress> addresses) {
         synchronized (addUpdateNodeExecutor) {
@@ -756,20 +735,12 @@ public class Dnsseed {
             });
         }
     }
-    
+
     static int logFileCounter = 0;
     public static void LogLine(String line) {
         synchronized(logList) {
             logList.addLast(line);
             logList.removeFirst();
-            try {
-                logFileStream.write(line.getBytes());
-                logFileStream.write('\n');
-                if (logFileCounter++ % 10 == 0)
-                    logFileStream.flush();
-            } catch (IOException e) {
-                ErrorExit(e);
-            }
         }
     }
 }

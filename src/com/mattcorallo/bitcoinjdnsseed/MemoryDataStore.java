@@ -22,6 +22,9 @@ import java.util.concurrent.locks.ReentrantLock;
 import com.google.bitcoin.core.Sha256Hash;
 import com.google.bitcoin.core.StoredBlock;
 import com.google.bitcoin.store.BlockStore;
+import com.google.common.hash.BloomFilter;
+import com.google.common.hash.Funnel;
+import com.google.common.hash.PrimitiveSink;
 
 
 interface FastSerializer {
@@ -176,6 +179,10 @@ public class MemoryDataStore extends DataStore {
             String logLine = null;
             PeerStateAndNode oldState = addressToStatusMap.get(addr);
             if (oldState == null || state != PeerState.UNTESTED) {
+                if (state == PeerState.UNTESTED && badNodesFilter.mightContain(addr))
+                    return null;
+                if (state == PeerState.UNTESTED && statusToAddressesMap[state.ordinal()].getSize() > 100000)
+                    return null;
                 boolean print = false;
                 if (oldState != null && oldState.state != PeerState.UNTESTED && oldState.state != PeerState.UNTESTABLE_ADDRESS)
                     print = true;
@@ -192,13 +199,20 @@ public class MemoryDataStore extends DataStore {
                 long lastGoodTime = state == PeerState.GOOD ? -1 : (oldState != null ? oldState.node.object.lastGoodTime : 0);
                 if (lastGoodTime > wasGoodCutoff)
                     state = PeerState.WAS_GOOD;
-                LinkedList<PeerAndLastUpdateTime>.Node newNode = statusToAddressesMap[state.ordinal()].addToTail(new PeerAndLastUpdateTime(addr, lastGoodTime));
+                LinkedList<PeerAndLastUpdateTime>.Node newNode = null;
+                if (state != PeerState.PEER_DISCONNECTED && state != PeerState.TIMEOUT)
+                    newNode = statusToAddressesMap[state.ordinal()].addToTail(new PeerAndLastUpdateTime(addr, lastGoodTime));
+                else
+                    addressToStatusMap.remove(addr);
                 // Remove/Update
                 if (oldState != null) {
                     statusToAddressesMap[oldState.state.ordinal()].remove(oldState.node);
                     oldState.state = state;
-                    oldState.node = newNode;
-                } else
+                    if (newNode != null)
+                        oldState.node = newNode;
+                    else
+                        badNodesFilter.put(addr);
+                } else if (newNode != null)
                     addressToStatusMap.put(addr, new PeerStateAndNode(state, newNode));
             }
             return logLine;
@@ -286,6 +300,8 @@ public class MemoryDataStore extends DataStore {
         blockHashList.ensureCapacity(300000);
         storageFile = file;
 
+        createFilter();
+
         //Kick off a thread to do the actual update processing
         new Thread() {
             public void run() {
@@ -305,11 +321,23 @@ public class MemoryDataStore extends DataStore {
             }
         }.start();
     }
+
+    private void createFilter() {
+        badNodesFilter = BloomFilter.create(new Funnel<InetSocketAddress>() {
+            @Override
+            public void funnel(InetSocketAddress from, PrimitiveSink into) {
+                into.putBytes(from.getAddress().getAddress());
+            }
+        }, 400000, 0.001);
+        badNodesFilterClearTime = System.currentTimeMillis();
+    }
     
     Lock addressToStatusMapLock = new ReentrantLock();
     private HashMap<InetSocketAddress, PeerStateAndNode> addressToStatusMap = new HashMap<InetSocketAddress, PeerStateAndNode>();
     private LinkedList<PeerAndLastUpdateTime>[] statusToAddressesMap = new LinkedList[PeerState.values().length];
 
+    private BloomFilter<InetSocketAddress> badNodesFilter;
+    private long badNodesFilterClearTime;
     @Override
     public void addUpdateNode(InetSocketAddress addr, PeerState state) {
         if (state == PeerState.WAS_GOOD)
@@ -341,6 +369,8 @@ public class MemoryDataStore extends DataStore {
                     temp = temp.next;
                 }
             }
+            if (badNodesFilterClearTime < System.currentTimeMillis() - retryTimes[PeerState.TIMEOUT.ordinal()]*1000)
+                createFilter();
             addressToStatusMapLock.unlock();
         }
         // We do significantly more work when testing nodes which return results,
