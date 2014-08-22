@@ -262,7 +262,7 @@ public class Dnsseed {
                     try {
                         FileOutputStream file = new FileOutputStream(fileName + ".tmp");
                         // We grab the most recently tested nodes
-                        for (InetAddress address : store.getMostRecentGoodNodes(500, params.getPort())) {
+                        for (InetAddress address : store.getMostRecentGoodNodes(100, params.getPort())) {
                             String line = null;
                             if (address instanceof Inet4Address)
                                 line = preEntry + preIPv4Entry + address.getHostAddress() + postEntry;
@@ -421,8 +421,7 @@ public class Dnsseed {
                     }
                     for (final InetSocketAddress addr : addressesToTest) {
                         if (addr.getAddress().isLoopbackAddress() || addr.getAddress().isSiteLocalAddress() ||
-                                addr.getAddress().isMulticastAddress() ||
-                                addr.getAddress() instanceof Inet6Address) // TODO: Get IPv6
+                                addr.getAddress().isMulticastAddress())
                             store.addUpdateNode(addr, DataStore.PeerState.UNTESTABLE_ADDRESS);
                         else
                             ScanHost(addr);
