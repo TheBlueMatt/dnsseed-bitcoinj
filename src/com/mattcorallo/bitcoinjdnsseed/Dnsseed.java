@@ -11,7 +11,6 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.Arrays;
-import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.LinkedList;
@@ -19,11 +18,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.FileHandler;
-import java.util.logging.Handler;
-import java.util.logging.Level;
 import java.util.logging.LogManager;
-import java.util.logging.SimpleFormatter;
 
 import com.google.bitcoin.core.AbstractPeerEventListener;
 import com.google.bitcoin.core.AddressMessage;
@@ -43,17 +38,13 @@ import com.google.bitcoin.core.PeerGroup;
 import com.google.bitcoin.core.Sha256Hash;
 import com.google.bitcoin.core.Transaction;
 import com.google.bitcoin.core.VersionMessage;
-import com.google.bitcoin.discovery.DnsDiscovery;
-import com.google.bitcoin.discovery.PeerDiscoveryException;
 import com.google.bitcoin.net.discovery.DnsDiscovery;
 import com.google.bitcoin.net.discovery.PeerDiscoveryException;
+import com.google.bitcoin.params.MainNetParams;
 import com.google.bitcoin.store.BlockStore;
 import com.google.bitcoin.store.BlockStoreException;
 import com.google.bitcoin.store.SPVBlockStore;
 import com.google.bitcoin.utils.Threading;
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.MoreExecutors;
 
 public class Dnsseed {
     static class ChannelFutureAndProgress {
@@ -66,7 +57,7 @@ public class Dnsseed {
     }
     static final HashMap<Peer, ChannelFutureAndProgress> peerToChannelMap = new HashMap<Peer, ChannelFutureAndProgress>();
     static PeerGroup peerGroup;
-    static final NetworkParameters params = NetworkParameters.prodNet();
+    static final NetworkParameters params = MainNetParams.get();
     static DataStore store;
     static File blockChainFile;
     static BlockStore blockStore;
@@ -91,8 +82,8 @@ public class Dnsseed {
 
     static final int MAX_BLOCKS_AHEAD = 25;
 
-    static final int DUMP_DATASTORE_PERIOD_SECONDS = 60 * 30; // Every 30 minutes
-    static final int DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER = 60 * 60 * 6 / DUMP_DATASTORE_PERIOD_SECONDS; // Every 6 hours (DUMP_DATASTORE_PERIOD_SECONDS * DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER)
+    static final int DUMP_DATASTORE_PERIOD_SECONDS = 60; // Every 1 minute
+    static final int DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER = 60 * 15 / DUMP_DATASTORE_PERIOD_SECONDS; // Every 15 minutes (DUMP_DATASTORE_PERIOD_SECONDS * DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER)
 
     static final LinkedList<String> logList = new LinkedList<String>();
 
@@ -145,7 +136,8 @@ public class Dnsseed {
                     while (exitableSemaphore > 0)
                         exitableLock.wait();
                     PauseScanning();
-                    peerGroup.stop();
+                    peerGroup.stopAsync();
+                    peerGroup.awaitTerminated(1, TimeUnit.SECONDS);
                     if (store instanceof MemoryDataStore) {
                         ((MemoryDataStore)store).saveNodesState();
                         ((MemoryDataStore)store).saveConfigAndBlocksState();
@@ -269,8 +261,8 @@ public class Dnsseed {
                 while (true) {
                     try {
                         FileOutputStream file = new FileOutputStream(fileName + ".tmp");
-                        // We grab the top 25 most recently tested nodes
-                        for (InetAddress address : store.getMostRecentGoodNodes(25, params.getPort())) {
+                        // We grab the most recently tested nodes
+                        for (InetAddress address : store.getMostRecentGoodNodes(500, params.getPort())) {
                             String line = null;
                             if (address instanceof Inet4Address)
                                 line = preEntry + preIPv4Entry + address.getHostAddress() + postEntry;
@@ -483,8 +475,8 @@ public class Dnsseed {
                 return null;
             }
         };
-        peerGroup.setUserAgent("DNSSeed", ">9000");
-        peerGroup.startAndWait();
+        peerGroup.setUserAgent("DNSSeed", "42");
+        peerGroup.startAsync().awaitRunning();
 
         final Peer localPeerOutside = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.getPort()));
 
@@ -539,9 +531,12 @@ public class Dnsseed {
                 if (peer == localPeer) {
                     new Thread(new Runnable() {
                         public void run() {
+                            localPeer = null;
                             try {
                                 Thread.sleep(1000);
                             } catch (InterruptedException e1) { }
+                            if (localPeer != null)
+                                return;
                             LogLine("Reconnecting to local peer after onPeerDisconnected");
                             try {
                                 localPeer = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.getPort()));
