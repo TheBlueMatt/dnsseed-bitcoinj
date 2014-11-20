@@ -4,7 +4,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.List;
 
-import com.google.bitcoin.core.Sha256Hash;
+import org.bitcoinj.core.Sha256Hash;
 
 /**
  * Copyright 2012 Matt Corallo.
@@ -48,9 +48,7 @@ public abstract class DataStore {
     // If the node was GOOD within the last N minutes, retry as often as GOOD
     public int ageOfLastSuccessToRetryAsGood;
     
-    // How far back in the chain to request the test block
-    static final int MIN_BLOCK_OFFSET = 50;
-    
+
     // Timeout is measured from initial connect attempt until a single block has been fully received (in seconds)
     public final Object totalRunTimeoutLock = new Object();
     public int totalRunTimeout = 10;
@@ -85,14 +83,6 @@ public abstract class DataStore {
     public abstract List<InetSocketAddress> getNodesToTest();
     
     public abstract List<InetAddress> getMostRecentGoodNodes(int numNodes, int port);
-    
-    public abstract int getMinBestHeight();
-    
-    public abstract void putHashAtHeight(int height, Sha256Hash hash);
-
-    public abstract Sha256Hash getHashAtHeight(int height);
 
     public abstract String getStatus();
-    
-    public abstract int getNumberOfHashesStored();
 }

@@ -19,9 +19,9 @@ import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-import com.google.bitcoin.core.Sha256Hash;
-import com.google.bitcoin.core.StoredBlock;
-import com.google.bitcoin.store.BlockStore;
+import org.bitcoinj.core.Sha256Hash;
+import org.bitcoinj.core.StoredBlock;
+import org.bitcoinj.store.BlockStore;
 import com.google.common.hash.BloomFilter;
 import com.google.common.hash.Funnel;
 import com.google.common.hash.PrimitiveSink;
@@ -268,36 +268,6 @@ public class MemoryDataStore extends DataStore {
             Dnsseed.ErrorExit(e);
         }
         
-        try {
-            FileInputStream inStream = new FileInputStream(file + ".blocks");
-            ObjectInputStream in = new ObjectInputStream(inStream);
-            blockHashList = (ArrayList<Sha256Hash>) in.readObject();
-            StoredBlock storedBlock = store.getChainHead();
-            for (int i = 0; i < 25 && storedBlock != null; i++) {
-                if (blockHashList.size() <= storedBlock.getHeight()) {
-                    while (blockHashList.size() <= storedBlock.getHeight())
-                        blockHashList.add(null);
-                }
-                blockHashList.set(storedBlock.getHeight(), storedBlock.getHeader().getHash());
-                storedBlock = storedBlock.getPrev(store);
-            }
-            int numNulls = 0;
-            for (Sha256Hash hash : blockHashList) {
-                if (hash != null)
-                    hashesStored++;
-                else
-                    numNulls++;
-            }
-            // The 0th hash will be null
-            if (numNulls > 1 || blockHashList.get(0) != null)
-                Dnsseed.ErrorExit((numNulls-1) + " null hash(es) in MemoryDataStore: Please reset blocks state");
-            in.close();
-            inStream.close();
-        } catch (FileNotFoundException e) {
-        } catch (Exception e) {
-            Dnsseed.ErrorExit(e);
-        }
-        blockHashList.ensureCapacity(300000);
         storageFile = file;
 
         createFilter();
@@ -422,41 +392,6 @@ public class MemoryDataStore extends DataStore {
         }
     }
 
-    ArrayList<Sha256Hash> blockHashList = new ArrayList<Sha256Hash>(300000);
-    int hashesStored = 0;
-    @Override
-    public int getMinBestHeight() {
-        synchronized (blockHashList) {
-            return blockHashList.size() - MIN_BLOCK_OFFSET;
-        }
-    }
-
-    @Override
-    public void putHashAtHeight(int height, Sha256Hash hash) {
-        synchronized (blockHashList) {
-            int origSize = blockHashList.size();
-            for (int i = blockHashList.size(); i <= height; i++) {
-                blockHashList.add(null);
-            }
-            blockHashList.set(height, hash);
-            hashesStored += (blockHashList.size() != origSize) ? 1 : 0;
-        }
-    }
-
-    @Override
-    public Sha256Hash getHashAtHeight(int height) {
-        synchronized (blockHashList) {
-            return blockHashList.get(height);
-        }
-    }
-
-    @Override
-    public int getNumberOfHashesStored() {
-        synchronized (blockHashList) {
-            return hashesStored;
-        }
-    }
-    
     public void saveNodesState() {
         try {
             FileOutputStream outStream = new FileOutputStream(storageFile + ".nodes.tmp");
@@ -472,14 +407,12 @@ public class MemoryDataStore extends DataStore {
             outStream.close();
             new File(storageFile + ".nodes").delete();
             new File(storageFile + ".nodes.tmp").renameTo(new File(storageFile + ".nodes"));
-        } catch (FileNotFoundException e) {
-            Dnsseed.ErrorExit(e);
         } catch (IOException e) {
             Dnsseed.ErrorExit(e);
         }
     }
     
-    public void saveConfigAndBlocksState() {
+    public void saveConfigState() {
         try {
             FileOutputStream outStream = new FileOutputStream(storageFile + ".settings.tmp");
             ObjectOutputStream out = new ObjectOutputStream(outStream);
@@ -501,23 +434,6 @@ public class MemoryDataStore extends DataStore {
             outStream.close();
             new File(storageFile + ".settings").delete();
             new File(storageFile + ".settings.tmp").renameTo(new File(storageFile + ".settings"));
-        } catch (FileNotFoundException e) {
-            Dnsseed.ErrorExit(e);
-        } catch (IOException e) {
-            Dnsseed.ErrorExit(e);
-        }
-        try {
-            FileOutputStream outStream = new FileOutputStream(storageFile + ".blocks.tmp");
-            ObjectOutputStream out = new ObjectOutputStream(outStream);
-            synchronized (blockHashList) {
-                out.writeObject(blockHashList);
-            }
-            out.close();
-            outStream.close();
-            new File(storageFile + ".blocks").delete();
-            new File(storageFile + ".blocks.tmp").renameTo(new File(storageFile + ".blocks"));
-        } catch (FileNotFoundException e) {
-            Dnsseed.ErrorExit(e);
         } catch (IOException e) {
             Dnsseed.ErrorExit(e);
         }

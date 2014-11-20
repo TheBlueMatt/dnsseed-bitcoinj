@@ -11,40 +11,24 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.LinkedList;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.logging.LogManager;
+import java.util.Random;
+import java.util.concurrent.*;
+import java.util.logging.*;
 
-import com.google.bitcoin.core.AbstractPeerEventListener;
-import com.google.bitcoin.core.AddressMessage;
-import com.google.bitcoin.core.AlertMessage;
-import com.google.bitcoin.core.Block;
-import com.google.bitcoin.core.BlockChain;
-import com.google.bitcoin.core.GetBlocksMessage;
-import com.google.bitcoin.core.GetAddrMessage;
-import com.google.bitcoin.core.GetDataMessage;
-import com.google.bitcoin.core.InventoryItem;
-import com.google.bitcoin.core.InventoryMessage;
-import com.google.bitcoin.core.Message;
-import com.google.bitcoin.core.NetworkParameters;
-import com.google.bitcoin.core.Peer;
-import com.google.bitcoin.core.PeerAddress;
-import com.google.bitcoin.core.PeerGroup;
-import com.google.bitcoin.core.Sha256Hash;
-import com.google.bitcoin.core.Transaction;
-import com.google.bitcoin.core.VersionMessage;
-import com.google.bitcoin.net.discovery.DnsDiscovery;
-import com.google.bitcoin.net.discovery.PeerDiscoveryException;
-import com.google.bitcoin.params.MainNetParams;
-import com.google.bitcoin.store.BlockStore;
-import com.google.bitcoin.store.BlockStoreException;
-import com.google.bitcoin.store.SPVBlockStore;
-import com.google.bitcoin.utils.Threading;
+import com.google.common.util.concurrent.Uninterruptibles;
+import org.bitcoinj.core.*;
+import org.bitcoinj.net.discovery.DnsDiscovery;
+import org.bitcoinj.net.discovery.PeerDiscoveryException;
+import org.bitcoinj.params.MainNetParams;
+import org.bitcoinj.store.BlockStore;
+import org.bitcoinj.store.BlockStoreException;
+import org.bitcoinj.store.MemoryBlockStore;
+import org.bitcoinj.store.SPVBlockStore;
+import org.bitcoinj.utils.Threading;
 
 public class Dnsseed {
     static class ChannelFutureAndProgress {
@@ -59,7 +43,7 @@ public class Dnsseed {
     static PeerGroup peerGroup;
     static final NetworkParameters params = MainNetParams.get();
     static DataStore store;
-    static File blockChainFile;
+    static ArrayList<Sha256Hash> blockHashList = new ArrayList<Sha256Hash>();
     static BlockStore blockStore;
     static BlockChain chain;
 
@@ -81,6 +65,9 @@ public class Dnsseed {
     static boolean isWaitingForEmptyPeerToStatusMap = false;
 
     static final int MAX_BLOCKS_AHEAD = 25;
+    // How far back in the chain to request the test block
+    static final int MIN_BLOCK_OFFSET = 10;
+    static final int MAX_BLOCK_OFFSET = 50;
 
     static final int DUMP_DATASTORE_PERIOD_SECONDS = 60; // Every 1 minute
     static final int DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER = 60 * 15 / DUMP_DATASTORE_PERIOD_SECONDS; // Every 15 minutes (DUMP_DATASTORE_PERIOD_SECONDS * DUMP_DATASTORE_NODES_PERIOD_MULTIPLIER)
@@ -116,9 +103,15 @@ public class Dnsseed {
         if (args.length != 2)
             System.exit(1);
 
-        LogManager.getLogManager().reset();
+        Logger root = Logger.getLogger("");
+        root.removeHandler(root.getHandlers()[0]);
+        root.setLevel(Level.INFO);
+        Handler logger = new FileHandler(args[0] + "/info.log", true);
+        logger.setLevel(Level.INFO);
+        logger.setFormatter(new SimpleFormatter());
+        root.addHandler(logger);
 
-        blockStore = new SPVBlockStore(params, new File(args[0] + "/dnsseed.chain"));
+        blockStore = new MemoryBlockStore(params);
         store = new MemoryDataStore(args[0] + "/memdatastore", blockStore);
 
         InitPeerGroup(args[1]);
@@ -136,11 +129,15 @@ public class Dnsseed {
                     while (exitableSemaphore > 0)
                         exitableLock.wait();
                     PauseScanning();
-                    peerGroup.stopAsync();
-                    peerGroup.awaitTerminated(1, TimeUnit.SECONDS);
+                    try {
+                        peerGroup.stopAsync().awaitTerminated(10, TimeUnit.SECONDS);
+                    } catch (IllegalStateException|TimeoutException e) {
+                        System.err.println("Failed to quit: " + e);
+                        e.printStackTrace(System.err);
+                    }
                     if (store instanceof MemoryDataStore) {
                         ((MemoryDataStore)store).saveNodesState();
-                        ((MemoryDataStore)store).saveConfigAndBlocksState();
+                        ((MemoryDataStore)store).saveConfigState();
                     }
                     System.exit(0);
                 }
@@ -305,7 +302,7 @@ public class Dnsseed {
                             ((MemoryDataStore) store).saveNodesState();
                         }
                         LogLine("Saving DataStore blocks state.");
-                        ((MemoryDataStore) store).saveConfigAndBlocksState();
+                        ((MemoryDataStore) store).saveConfigState();
                         ContinueScanning();
                         synchronized (exitableLock) {
                             exitableSemaphore--;
@@ -325,7 +322,7 @@ public class Dnsseed {
                         exitableSemaphore++;
                     }
                     //Pre-loaded values
-                    int hashesStored = store.getNumberOfHashesStored();
+                    int hashesStored = blockHashList.size() - 1;
                     int totalRunTimeoutCache;
                     synchronized(store.totalRunTimeoutLock) {
                         totalRunTimeoutCache = store.totalRunTimeout;
@@ -456,16 +453,15 @@ public class Dnsseed {
                     synchronized(statusLock) {
                         isWaitingForEmptyPeerToStatusMap = false;
                     }
-                    try {
-                        Thread.sleep(1 * 1000);
-                    } catch (InterruptedException e) {
-                        ErrorExit(e);
-                    }
+                    System.gc();
+                    Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
                 }
             }
         }.start();
     }
 
+
+    static Peer localPeer;
     private static void InitPeerGroup(final String localPeerAddress) throws BlockStoreException, UnknownHostException {
         chain = new BlockChain(params, blockStore);
         peerGroup = new PeerGroup(params, chain) {
@@ -477,10 +473,9 @@ public class Dnsseed {
         peerGroup.setUserAgent("DNSSeed", "42");
         peerGroup.startAsync().awaitRunning();
 
-        final Peer localPeerOutside = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.getPort()));
+        localPeer = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.getPort()));
 
         peerGroup.addEventListener(new AbstractPeerEventListener() {
-            Peer localPeer = localPeerOutside;
             @Override
             public void onPeerConnected(Peer peer, int peerCount) {
                 if (peer == localPeer) {
@@ -501,7 +496,7 @@ public class Dnsseed {
                     if (peer.getPeerVersionMessage().clientVersion < store.minVersion)
                         disconnectReason = DataStore.PeerState.LOW_VERSION;
                 }
-                if (peer.getBestHeight() < store.getMinBestHeight())
+                if (peer.getBestHeight() < blockHashList.size() - MIN_BLOCK_OFFSET)
                     disconnectReason = DataStore.PeerState.LOW_BLOCK_COUNT;
                 try {
                     if (peer.getBestHeight() > chain.getBestChainHeight() + MAX_BLOCKS_AHEAD)
@@ -515,12 +510,12 @@ public class Dnsseed {
                 }
                 int targetHeight = 0;
                 peer.sendMessage(new GetAddrMessage(params));
-                targetHeight = store.getMinBestHeight();
-                peer.sendMessage(new GetBlocksMessage(params, Arrays.asList(store.getHashAtHeight(targetHeight - 1)),
-                        store.getHashAtHeight(targetHeight + 1)));
+                targetHeight = blockHashList.size() - (new Random().nextInt(MAX_BLOCK_OFFSET - MIN_BLOCK_OFFSET) + MIN_BLOCK_OFFSET);
+                peer.sendMessage(new GetBlocksMessage(params, Arrays.asList(blockHashList.get(targetHeight - 1)),
+                        blockHashList.get(targetHeight + 1)));
                 synchronized(peerToChannelMap) {
                     ChannelFutureAndProgress peerState = peerToChannelMap.get(peer);
-                    peerState.targetHash = store.getHashAtHeight(targetHeight);
+                    peerState.targetHash = blockHashList.get(targetHeight);
                     peerState.timeoutState = DataStore.PeerState.TIMEOUT_DURING_REQUEST;
                 }
             }
@@ -557,14 +552,8 @@ public class Dnsseed {
                     AsyncAddUntestedNodes(((AddressMessage)m).getAddresses());
                     return null;
                 }
-                if (peer == localPeer) {
-                    if (m instanceof Block) {
-                        synchronized(exitableLock) {
-                            exitableSemaphore++;
-                        }
-                    }
+                if (peer == localPeer)
                     return m;
-                }
                 if (m instanceof Block || m instanceof InventoryMessage) {
                     ChannelFutureAndProgress peerState;
                     synchronized(peerToChannelMap) {
@@ -582,7 +571,7 @@ public class Dnsseed {
                                 break;
                             }
                         }
-                    } else if (m instanceof Block && ((Block)m).getHash().equals(peerState.targetHash)) {
+                    } else if (m instanceof Block && m.getHash().equals(peerState.targetHash)) {
                         PeerPassedBlockDownloadVerification(peer);
                     }
                     return null;
@@ -596,14 +585,24 @@ public class Dnsseed {
             @Override
             public void onBlocksDownloaded(Peer peer, Block block, int blocksLeft) {
                 try {
-                    store.putHashAtHeight(blockStore.get(block.getHash()).getHeight(), block.getHash());
+                    StoredBlock b = blockStore.getChainHead();
+                    int i = b.getHeight();
+                    blockHashList.ensureCapacity(i + 1);
+                    for (int j = blockHashList.size(); j <= i; j++)
+                        blockHashList.add(null);
+
+                    for (Block header = b.getHeader(); ; i--) {
+                        if (blockHashList.get(i) == header.getHash())
+                            break;
+                        blockHashList.set(i, header.getHash());
+                        header = blockStore.get(header.getPrevBlockHash()).getHeader();
+                    }
                 } catch (BlockStoreException e) {
                     Dnsseed.ErrorExit(e);
                 }
-                synchronized(exitableLock) {
-                    exitableSemaphore--;
-                    exitableLock.notifyAll();
-                }
+
+                if (blockHashList.size() != chain.getBestChainHeight() + 1)
+                    Dnsseed.ErrorExit("Chain size didnt match hashlist size after fill");
                 if (blocksLeft <= 0)
                     StartScan(peer);
             }

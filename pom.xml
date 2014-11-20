@@ -11,9 +11,9 @@
     <dependencies>
         <!-- Depend on bitcoinj -->
         <dependency>
-            <groupId>com.google</groupId>
-            <artifactId>bitcoinj</artifactId>
-            <version>0.12-SNAPSHOT</version>
+            <groupId>org.bitcoinj</groupId>
+            <artifactId>bitcoinj-core</artifactId>
+            <version>0.13-SNAPSHOT</version>
             <scope>compile</scope>
         </dependency>
 
