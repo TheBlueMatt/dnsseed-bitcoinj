@@ -641,7 +641,7 @@ public class Dnsseed {
 
         try {
             final Peer peer = new Peer(params, chain, new PeerAddress(address), "DNSSeed", "43");
-            peer.addEventListener(peerEventListener);
+            peer.addEventListener(peerEventListener, Threading.SAME_THREAD);
             synchronized(peerToChannelMap) {
                 peerToChannelMap.put(peer, new ChannelFutureAndProgress());
             }
