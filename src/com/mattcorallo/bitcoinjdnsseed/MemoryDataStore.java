@@ -140,14 +140,12 @@ class PeerAndLastUpdateTime implements FastSerializer {
     // For deserialization
     PeerAndLastUpdateTime() {}
     
-    @Override
     public void writeTo(ObjectOutputStream stream) throws IOException {
         stream.writeObject(address);
         stream.writeLong(lastUpdateTime);
         stream.writeLong(lastGoodTime);
     }
     
-    @Override
     public void readFrom(ObjectInputStream stream) throws IOException, ClassNotFoundException {
         this.address = (InetSocketAddress)stream.readObject();
         this.lastUpdateTime = stream.readLong();
@@ -181,14 +179,14 @@ public class MemoryDataStore extends DataStore {
             if (oldState == null || state != PeerState.UNTESTED) {
                 if (state == PeerState.UNTESTED && badNodesFilter.mightContain(addr))
                     return null;
-                if (state == PeerState.UNTESTED && statusToAddressesMap[state.ordinal()].getSize() > 100000)
+                if (state == PeerState.UNTESTED && statusToAddressesMap[state.ordinal()].getSize() > 10000)
                     return null;
                 boolean print = false;
-                if (oldState != null && oldState.state != PeerState.UNTESTED && oldState.state != PeerState.UNTESTABLE_ADDRESS)
+                if (oldState != null && oldState.state != PeerState.UNTESTED)
                     print = true;
-                else if (state != PeerState.UNTESTED && state != PeerState.PEER_DISCONNECTED && state != PeerState.TIMEOUT && state != PeerState.UNTESTABLE_ADDRESS)
+                else if (state != PeerState.UNTESTED && state != PeerState.PEER_DISCONNECTED && state != PeerState.TIMEOUT)
                     print = true;
-                else if (!addr.getAddress().toString().split("/")[0].equals("") && state != PeerState.UNTESTED && state != PeerState.UNTESTABLE_ADDRESS)
+                else if (!addr.getAddress().toString().split("/")[0].equals("") && state != PeerState.UNTESTED)
                     print = true;
                 if (oldState != null && oldState.state == PeerState.WAS_GOOD && (state == PeerState.TIMEOUT_DURING_REQUEST || state == PeerState.TIMEOUT || state == PeerState.PEER_DISCONNECTED))
                     print = false;
@@ -294,11 +292,10 @@ public class MemoryDataStore extends DataStore {
 
     private void createFilter() {
         badNodesFilter = BloomFilter.create(new Funnel<InetSocketAddress>() {
-            @Override
             public void funnel(InetSocketAddress from, PrimitiveSink into) {
                 into.putBytes(from.getAddress().getAddress());
             }
-        }, 400000, 0.001);
+        }, 400000, 0.0001);
         badNodesFilterClearTime = System.currentTimeMillis();
     }
     
@@ -348,7 +345,12 @@ public class MemoryDataStore extends DataStore {
         Collections.shuffle(resultsList);
         return resultsList;
     }
-    
+
+    @Override
+    public boolean shouldIgnoreAddr(InetSocketAddress addr) {
+        return badNodesFilter.mightContain(addr);
+    }
+
     @Override
     public List<InetAddress> getMostRecentGoodNodes(int numNodes, int port) {
         addressToStatusMapLock.lock();

@@ -402,6 +402,16 @@ public class Dnsseed {
         }.start();
     }
 
+    private static boolean shouldIgnoreAddress(InetSocketAddress sockAddr) {
+        if (sockAddr.getPort() != 8333)
+            return true;
+        InetAddress addr = sockAddr.getAddress();
+        if (addr instanceof Inet6Address)
+            return true;
+        return addr.isLoopbackAddress() || addr.isSiteLocalAddress() || addr.isMulticastAddress() ||
+                addr.isLinkLocalAddress() || addr.isAnyLocalAddress() || store.shouldIgnoreAddr(sockAddr);
+    }
+
     private static void LaunchAddNodesThread() {
         new Thread() {
             public void run() {
@@ -412,22 +422,16 @@ public class Dnsseed {
                         numScansCompletedThisRound = 0;
                     }
                     for (final InetSocketAddress addr : addressesToTest) {
-                        if (addr.getAddress().isLoopbackAddress() || addr.getAddress().isSiteLocalAddress() ||
-                                addr.getAddress().isMulticastAddress())
-                            store.addUpdateNode(addr, DataStore.PeerState.UNTESTABLE_ADDRESS);
-                        else
-                            ScanHost(addr);
-                        synchronized(statusLock) {
+                        synchronized (statusLock) {
                             numScansCompletedThisRound++;
                         }
-                        try {
+                        if (!shouldIgnoreAddress(addr)) {
+                            ScanHost(addr);
                             int sleepTime;
-                            synchronized(store.connectionsPerSecondLock) {
-                                sleepTime = 1000/store.connectionsPerSecond;
+                            synchronized (store.connectionsPerSecondLock) {
+                                sleepTime = 1000 / store.connectionsPerSecond;
                             }
-                            Thread.sleep(sleepTime);
-                        } catch (InterruptedException e) {
-                            ErrorExit(e);
+                            Uninterruptibles.sleepUninterruptibly(sleepTime, TimeUnit.MILLISECONDS);
                         }
                     }
                     synchronized(statusLock) {
@@ -717,8 +721,9 @@ public class Dnsseed {
             addUpdateNodeExecutor.submit(new Runnable() {
                 public void run() {
                     for (PeerAddress address : addresses)
-                        store.addUpdateNode(address.toSocketAddress(),
-                                DataStore.PeerState.UNTESTED);
+                        if (!shouldIgnoreAddress(address.toSocketAddress()))
+                            store.addUpdateNode(address.toSocketAddress(),
+                                    DataStore.PeerState.UNTESTED);
                 }
             });
         }

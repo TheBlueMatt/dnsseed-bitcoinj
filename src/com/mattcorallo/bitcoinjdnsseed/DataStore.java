@@ -36,7 +36,6 @@ public abstract class DataStore {
         TIMEOUT_DURING_REQUEST,
         GOOD,
         WAS_GOOD, // Was good up until some time N, now its not
-        UNTESTABLE_ADDRESS
     }
     // The maximum length of a name in PeerState
     public static final int PEER_STATE_MAX_LENGTH = 22;
@@ -73,14 +72,14 @@ public abstract class DataStore {
             retryTimes[PeerState.GOOD.ordinal()] =                       30*60;
             retryTimes[PeerState.WAS_GOOD.ordinal()] =                   45*60;
             ageOfLastSuccessToRetryAsGood =                          24 *60*60;
-
-            retryTimes[PeerState.UNTESTABLE_ADDRESS.ordinal()] =      Integer.MAX_VALUE; // Never retest
         }
     }
     
     public abstract void addUpdateNode(InetSocketAddress addr, PeerState state);
     
     public abstract List<InetSocketAddress> getNodesToTest();
+
+    public abstract boolean shouldIgnoreAddr(InetSocketAddress addr);
     
     public abstract List<InetAddress> getMostRecentGoodNodes(int numNodes, int port);
 
