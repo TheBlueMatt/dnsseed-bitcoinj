@@ -544,6 +544,8 @@ public class Dnsseed {
 
         localPeerGroup.addEventListener(new AbstractPeerEventListener() {
             Peer localPeer = localPeerOutside;
+            int blocksProcessing = 0;
+
             @Override
             public void onPeerConnected(Peer peer, int peerCount) {
                 if (peer.getBestHeight() == chain.getBestChainHeight())
@@ -587,6 +589,7 @@ public class Dnsseed {
                 if (m instanceof Block) {
                     synchronized(exitableLock) {
                         exitableSemaphore++;
+                        blocksProcessing++;
                     }
                 }
                 return m;
@@ -595,12 +598,19 @@ public class Dnsseed {
             @Override
             public void onBlocksDownloaded(Peer peer, Block block, FilteredBlock filteredBlock, int blocksLeft) {
                 try {
-                    store.putHashAtHeight(blockStore.get(block.getHash()).getHeight(), block.getHash());
+                    StoredBlock storedBlock = blockStore.get(block.getHash());
+                    while (storedBlock != null) {
+                        Sha256Hash storedBlockHash = storedBlock.getHeader().getHash();
+                        if (storedBlockHash.equals(store.getHashAtHeight(storedBlock.getHeight())))
+                            break;
+                        store.putHashAtHeight(storedBlock.getHeight(), storedBlockHash);
+                    }
                 } catch (BlockStoreException e) {
                     Dnsseed.ErrorExit(e);
                 }
                 synchronized(exitableLock) {
-                    exitableSemaphore--;
+                    exitableSemaphore -= blocksProcessing;
+                    blocksProcessing = 0;
                     exitableLock.notifyAll();
                 }
                 if (blocksLeft <= 0)
