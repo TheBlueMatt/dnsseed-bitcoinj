@@ -197,6 +197,13 @@ public class Dnsseed {
                         LogLine("Invalid argument");
                     }
                 }
+            } else if (line.length() >= 3 && line.charAt(0) == 's' && line.charAt(1) == ' ') {
+                String[] values = line.split(" ");
+                if (values.length == 2) {
+                    synchronized(store.subverRegexLock) {
+                        store.subverRegex = values[1];
+                    }
+                }
             } else if (line.equals("n")) {
                 synchronized(updateStatsLock) {
                     printNodeCounts = !printNodeCounts;
@@ -326,6 +333,10 @@ public class Dnsseed {
                     synchronized(store.minVersionLock) {
                         minVersionCache = store.minVersion;
                     }
+                    String subverRegexCache;
+                    synchronized (store.subverRegexLock) {
+                        subverRegexCache = store.subverRegex;
+                    }
                     System.out.print("\033[2J\033[;H");
                     System.out.println();
                     synchronized(logList) {
@@ -357,6 +368,7 @@ public class Dnsseed {
                     System.out.println("Current block count: " + chain.getBestChainHeight() + " == " + hashesStored);
                     System.out.println("Timeout for full run (in seconds): " + totalRunTimeoutCache + " (\"t x\" to change value to x seconds)");
                     System.out.println("Minimum protocol version: " + minVersionCache + " (\"v x\" to change value to x)");
+                    System.out.println("Subversion match regex: " + subverRegexCache + " (\"s x\" to change value to x)");
                     System.out.println();
                     synchronized (updateStatsLock) {
                         if (printTimeouts) {
@@ -487,6 +499,10 @@ public class Dnsseed {
                 synchronized (store.minVersionLock) {
                     if (peer.getPeerVersionMessage().clientVersion < store.minVersion)
                         disconnectReason = DataStore.PeerState.LOW_VERSION;
+                }
+                synchronized (store.subverRegexLock) {
+                    if (!peer.getPeerVersionMessage().subVer.matches(store.subverRegex))
+                        disconnectReason = DataStore.PeerState.NOT_FULL_NODE;
                 }
                 if (peer.getBestHeight() < blockHashList.size() - MIN_BLOCK_OFFSET)
                     disconnectReason = DataStore.PeerState.LOW_BLOCK_COUNT;

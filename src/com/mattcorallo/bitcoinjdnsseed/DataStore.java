@@ -30,6 +30,7 @@ public abstract class DataStore {
         LOW_BLOCK_COUNT,
         HIGH_BLOCK_COUNT,
         LOW_VERSION,
+        BAD_VERSION,
         PEER_DISCONNECTED,
         NOT_FULL_NODE,
         TIMEOUT,
@@ -59,12 +60,16 @@ public abstract class DataStore {
     public final Object minVersionLock = new Object();
     public int minVersion = 70002;
 
+    public final Object subverRegexLock = new Object();
+    public String subverRegex = "*";
+
     public DataStore() {
         synchronized(retryTimesLock) {
             retryTimes[PeerState.UNTESTED.ordinal()] =                0 *60*60; // Always try UNTESTED Nodes
             retryTimes[PeerState.LOW_BLOCK_COUNT.ordinal()] =            90*60;
             retryTimes[PeerState.HIGH_BLOCK_COUNT.ordinal()] =        2 *60*60;
             retryTimes[PeerState.LOW_VERSION.ordinal()] =            24 *60*60;
+            retryTimes[PeerState.BAD_VERSION.ordinal()] =            24 *60*60;
             retryTimes[PeerState.PEER_DISCONNECTED.ordinal()] =      48 *60*60;
             retryTimes[PeerState.NOT_FULL_NODE.ordinal()] =          24 *60*60;
             retryTimes[PeerState.TIMEOUT.ordinal()] =                48 *60*60;

@@ -260,6 +260,9 @@ public class MemoryDataStore extends DataStore {
             synchronized(minVersionLock) {
                 minVersion = in.readInt();
             }
+            synchronized (subverRegexLock) {
+                subverRegex = in.readUTF();
+            }
             in.close();
             inStream.close();
         } catch (FileNotFoundException e) {
@@ -430,6 +433,9 @@ public class MemoryDataStore extends DataStore {
             }
             synchronized(minVersionLock) {
                 out.writeInt(minVersion);
+            }
+            synchronized (subverRegexLock) {
+                out.writeUTF(subverRegex);
             }
             out.close();
             outStream.close();
