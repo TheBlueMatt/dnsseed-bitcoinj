@@ -299,7 +299,7 @@ public class MemoryDataStore extends DataStore {
             public void funnel(InetSocketAddress from, PrimitiveSink into) {
                 into.putBytes(from.getAddress().getAddress());
             }
-        }, 400000, 0.0001);
+        }, 100000, 0.0001);
         badNodesFilterClearTime = System.currentTimeMillis();
     }
     
