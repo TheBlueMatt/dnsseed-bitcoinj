@@ -24,7 +24,7 @@ import org.bitcoinj.core.Sha256Hash;
 
 
 public abstract class DataStore {
-    public static enum PeerState {
+    public enum PeerState {
         // UNTESTED MUST be first
         UNTESTED,
         LOW_BLOCK_COUNT,
@@ -47,8 +47,10 @@ public abstract class DataStore {
     // Locked by retryTimesLock
     // If the node was GOOD within the last N minutes, retry as often as GOOD
     public int ageOfLastSuccessToRetryAsGood;
-    
 
+    // How far back in the chain to request the test block
+    static final int MIN_BLOCK_OFFSET = 10;
+    
     // Timeout is measured from initial connect attempt until a single block has been fully received (in seconds)
     public final Object totalRunTimeoutLock = new Object();
     public int totalRunTimeout = 10;
@@ -62,6 +64,9 @@ public abstract class DataStore {
 
     public final Object subverRegexLock = new Object();
     public String subverRegex = "*";
+
+    // Note that the item at position 0 has a privileged state as the "default", as well as minimum set of flags
+    public static final long[] SERVICE_GROUPS_TRACKED = {0x1, 0x9}; // See DnsSeed - currently broken for values >9
 
     public DataStore() {
         synchronized(retryTimesLock) {
@@ -80,13 +85,21 @@ public abstract class DataStore {
         }
     }
     
-    public abstract void addUpdateNode(InetSocketAddress addr, PeerState state);
+    public abstract void addUpdateNode(InetSocketAddress addr, PeerState state, long serviceBits);
     
     public abstract List<InetSocketAddress> getNodesToTest();
 
     public abstract boolean shouldIgnoreAddr(InetSocketAddress addr);
     
-    public abstract List<InetAddress> getMostRecentGoodNodes(int numNodes, int port);
+    public abstract List<InetAddress> getMostRecentGoodNodes(int numNodes, int port, int serviceGroupsTrackedIndex);
+
+    public abstract int getMinBestHeight();
+    
+    public abstract void putHashAtHeight(int height, Sha256Hash hash);
+
+    public abstract Sha256Hash getHashAtHeight(int height);
 
     public abstract String getStatus();
+
+    public abstract int getNumberOfHashesStored();
 }
