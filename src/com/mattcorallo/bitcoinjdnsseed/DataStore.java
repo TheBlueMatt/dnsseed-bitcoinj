@@ -63,7 +63,7 @@ public abstract class DataStore {
     public int minVersion = 70002;
 
     public final Object subverRegexLock = new Object();
-    public String subverRegex = "*";
+    public String subverRegex = ".*";
 
     // Note that the item at position 0 has a privileged state as the "default", as well as minimum set of flags
     public static final long[] SERVICE_GROUPS_TRACKED = {0x1, 0x9}; // See DnsSeed - currently broken for values >9

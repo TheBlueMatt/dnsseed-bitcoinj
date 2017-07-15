@@ -24,7 +24,6 @@ import com.google.common.base.Predicate;
 import com.mattcorallo.bitcoinjdnsseed.filter.BloomFilterStrategies.BitArray;
 import com.google.common.hash.Funnel;
 
-import java.io.Serializable;
 import java.util.Random;
 
 import javax.annotation.Nullable;

@@ -15,12 +15,9 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import com.mattcorallo.bitcoinjdnsseed.filter.LossyBloomFilter;
 import org.bitcoinj.core.Sha256Hash;
-import org.bitcoinj.core.StoredBlock;
 import org.bitcoinj.store.BlockStore;
-import com.google.common.hash.BloomFilter;
 import com.google.common.hash.Funnel;
 import com.google.common.hash.PrimitiveSink;
-import org.spongycastle.asn1.dvcs.Data;
 
 
 interface FastSerializer {

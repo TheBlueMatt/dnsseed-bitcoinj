@@ -5,14 +5,11 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.math.BigInteger;
 import java.net.*;
 import java.util.Arrays;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.LinkedList;
-import java.util.Random;
 import java.util.concurrent.*;
 import java.util.logging.*;
 
@@ -21,11 +18,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.LogManager;
+import java.util.regex.PatternSyntaxException;
 
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.UncheckedExecutionException;
 import org.bitcoinj.core.*;
 import org.bitcoinj.net.NioClientManager;
 import org.bitcoinj.net.discovery.DnsDiscovery;
@@ -34,10 +30,7 @@ import org.bitcoinj.params.MainNetParams;
 import org.bitcoinj.store.BlockStore;
 import org.bitcoinj.store.BlockStoreException;
 import org.bitcoinj.store.MemoryBlockStore;
-import org.bitcoinj.store.SPVBlockStore;
 import org.bitcoinj.utils.Threading;
-
-import static javax.swing.text.html.HTML.Tag.HEAD;
 
 public class Dnsseed {
     static class ChannelFutureAndProgress {
@@ -208,7 +201,12 @@ public class Dnsseed {
                 String[] values = line.split(" ");
                 if (values.length == 2) {
                     synchronized (store.subverRegexLock) {
-                        store.subverRegex = values[1];
+                        try {
+                            "".matches(values[1]);
+                            store.subverRegex = values[1];
+                        } catch (PatternSyntaxException e) {
+                           LogLine("Bad regex");
+                        }
                     }
                 }
             } else if (line.length() >= 3 && line.charAt(0) == 'a' && line.charAt(1) == ' ') {
@@ -534,7 +532,7 @@ public class Dnsseed {
                 }
                 synchronized (store.subverRegexLock) {
                     if (!peer.getPeerVersionMessage().subVer.matches(store.subverRegex))
-                        disconnectReason = DataStore.PeerState.NOT_FULL_NODE;
+                        disconnectReason = DataStore.PeerState.BAD_VERSION;
                 }
                 if (peer.getBestHeight() < store.getMinBestHeight())
                     disconnectReason = DataStore.PeerState.LOW_BLOCK_COUNT;
@@ -822,7 +820,7 @@ public class Dnsseed {
     public static void LogLine(String line) {
         synchronized(logList) {
             logList.addLast(line);
-            if (logList.size() > 10)
+            if (logList.size() > 50)
                 logList.removeFirst();
         }
     }

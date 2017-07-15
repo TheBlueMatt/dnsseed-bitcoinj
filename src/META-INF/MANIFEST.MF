@@ -1,0 +1,7 @@
+Manifest-Version: 1.0
+Class-Path: bitcoinj-core-0.13.6.jar jsr305-2.0.1.jar scrypt-1.4.0.jar
+  slf4j-api-1.7.5.jar protobuf-java-2.5.0.jar okhttp-2.2.0.jar orchid-
+ 1.1.1.jar guava-16.0.1.jar jcip-annotations-1.0.jar slf4j-jdk14-1.7.5
+ .jar core-1.51.0.0.jar okio-1.2.0.jar
+Main-Class: com.mattcorallo.bitcoinjdnsseed.Dnsseed
+
