@@ -9,13 +9,7 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Queue;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -25,6 +19,7 @@ import org.bitcoinj.store.BlockStore;
 import com.google.common.hash.BloomFilter;
 import com.google.common.hash.Funnel;
 import com.google.common.hash.PrimitiveSink;
+import org.spongycastle.asn1.dvcs.Data;
 
 
 interface FastSerializer {
@@ -122,19 +117,21 @@ class PeerAndLastUpdateTime implements FastSerializer {
     InetSocketAddress address = null;
     long lastUpdateTime = 0;
     long lastGoodTime;
+    long serviceBits;
     
     /**
      * Constructor
      * @param address
      * @param lastGoodTime if (-1) set to current time
      */
-    PeerAndLastUpdateTime(InetSocketAddress address, long lastGoodTime) {
+    PeerAndLastUpdateTime(InetSocketAddress address, long lastGoodTime, long serviceBits) {
         this.address = address;
         this.lastUpdateTime = System.currentTimeMillis()/1000;
         if (lastGoodTime != -1)
             this.lastGoodTime = lastGoodTime;
         else
             this.lastGoodTime = this.lastUpdateTime;
+        this.serviceBits = serviceBits;
     }
     
     // For deserialization
@@ -144,17 +141,19 @@ class PeerAndLastUpdateTime implements FastSerializer {
         stream.writeObject(address);
         stream.writeLong(lastUpdateTime);
         stream.writeLong(lastGoodTime);
+        stream.writeLong(serviceBits);
     }
     
     public void readFrom(ObjectInputStream stream) throws IOException, ClassNotFoundException {
         this.address = (InetSocketAddress)stream.readObject();
         this.lastUpdateTime = stream.readLong();
         this.lastGoodTime = stream.readLong();
+        this.serviceBits = stream.readLong();
     }
 }
 
 public class MemoryDataStore extends DataStore {
-    class PeerStateAndNode {
+    private class PeerStateAndNode {
         PeerState state;
         LinkedList<PeerAndLastUpdateTime>.Node node;
         PeerStateAndNode(PeerState state, LinkedList<PeerAndLastUpdateTime>.Node node) {
@@ -163,17 +162,19 @@ public class MemoryDataStore extends DataStore {
         }
     }
     
-    class UpdateState {
-        public InetSocketAddress addr;
-        public PeerState state;
-        public long wasGoodCutoff;
-        public UpdateState(InetSocketAddress addr, PeerState state, long wasGoodCutoff) {
+    private class UpdateState {
+        InetSocketAddress addr;
+        PeerState state;
+        long wasGoodCutoff;
+        long serviceBits;
+        UpdateState(InetSocketAddress addr, PeerState state, long wasGoodCutoff, long serviceBits) {
             this.addr = addr;
             this.state = state;
             this.wasGoodCutoff = wasGoodCutoff;
+            this.serviceBits = serviceBits;
         }
         // Make sure we are holding addressToStatusMapLock!
-        public String runUpdate() {
+        String runUpdate() {
             String logLine = null;
             PeerStateAndNode oldState = addressToStatusMap.get(addr);
             if (oldState == null || state != PeerState.UNTESTED) {
@@ -199,12 +200,16 @@ public class MemoryDataStore extends DataStore {
                     state = PeerState.WAS_GOOD;
                 LinkedList<PeerAndLastUpdateTime>.Node newNode = null;
                 if (state != PeerState.PEER_DISCONNECTED && state != PeerState.TIMEOUT)
-                    newNode = statusToAddressesMap[state.ordinal()].addToTail(new PeerAndLastUpdateTime(addr, lastGoodTime));
+                    newNode = statusToAddressesMap[state.ordinal()].addToTail(new PeerAndLastUpdateTime(addr, lastGoodTime, serviceBits));
                 else
                     addressToStatusMap.remove(addr);
                 // Remove/Update
                 if (oldState != null) {
                     statusToAddressesMap[oldState.state.ordinal()].remove(oldState.node);
+                    if (oldState.state == PeerState.GOOD) {
+                        for (int i = 0; i < DataStore.SERVICE_GROUPS_TRACKED.length; i++)
+                            bitsPeers[i].remove(addr);
+                    }
                     oldState.state = state;
                     if (newNode != null)
                         oldState.node = newNode;
@@ -212,11 +217,17 @@ public class MemoryDataStore extends DataStore {
                         badNodesFilter.put(addr);
                 } else if (newNode != null)
                     addressToStatusMap.put(addr, new PeerStateAndNode(state, newNode));
+                if (newNode != null && state == PeerState.GOOD) {
+                    for (int i = 0; i < DataStore.SERVICE_GROUPS_TRACKED.length; i++) {
+                        if ((serviceBits & DataStore.SERVICE_GROUPS_TRACKED[i]) == DataStore.SERVICE_GROUPS_TRACKED[i])
+                            bitsPeers[i].add(addr);
+                    }
+                }
             }
             return logLine;
         }
     }
-    Queue<UpdateState> queueStateUpdates = new java.util.LinkedList<UpdateState>();
+    private Queue<UpdateState> queueStateUpdates = new java.util.LinkedList<UpdateState>();
         
     private String storageFile;
     
@@ -241,7 +252,17 @@ public class MemoryDataStore extends DataStore {
         } catch (Exception e) {
             Dnsseed.ErrorExit(e);
         }
-        
+
+        for (int i = 0; i < DataStore.SERVICE_GROUPS_TRACKED.length; i++)
+            bitsPeers[i] = new LinkedHashSet<InetSocketAddress>();
+        LinkedList<PeerAndLastUpdateTime>.Node temp = statusToAddressesMap[PeerState.GOOD.ordinal()].getTail();
+        while (temp != null) {
+            for (int i = 0; i < DataStore.SERVICE_GROUPS_TRACKED.length; i++)
+                if ((temp.object.serviceBits & DataStore.SERVICE_GROUPS_TRACKED[i]) == DataStore.SERVICE_GROUPS_TRACKED[i])
+                    bitsPeers[i].add(temp.object.address);
+            temp = temp.prev;
+        }
+
         try {
             FileInputStream inStream = new FileInputStream(file + ".settings");
             ObjectInputStream in = new ObjectInputStream(inStream);
@@ -332,11 +353,12 @@ public class MemoryDataStore extends DataStore {
     Lock addressToStatusMapLock = new ReentrantLock();
     private HashMap<InetSocketAddress, PeerStateAndNode> addressToStatusMap = new HashMap<InetSocketAddress, PeerStateAndNode>();
     private LinkedList<PeerAndLastUpdateTime>[] statusToAddressesMap = new LinkedList[PeerState.values().length];
+    private LinkedHashSet<InetSocketAddress>[] bitsPeers = new LinkedHashSet[DataStore.SERVICE_GROUPS_TRACKED.length];
 
     private BloomFilter<InetSocketAddress> badNodesFilter;
     private long badNodesFilterClearTime;
     @Override
-    public void addUpdateNode(InetSocketAddress addr, PeerState state) {
+    public void addUpdateNode(InetSocketAddress addr, PeerState state, long serviceBits) {
         if (state == PeerState.WAS_GOOD)
             Dnsseed.ErrorExit("addUpdateNode WAS_GOOD");
         long wasGoodCutoff;
@@ -344,7 +366,7 @@ public class MemoryDataStore extends DataStore {
             wasGoodCutoff = System.currentTimeMillis()/1000 - ageOfLastSuccessToRetryAsGood;
         }
         synchronized(queueStateUpdates) {
-            queueStateUpdates.add(new UpdateState(addr, state, wasGoodCutoff));
+            queueStateUpdates.add(new UpdateState(addr, state, wasGoodCutoff, serviceBits));
             queueStateUpdates.notify();
         }
     }
@@ -377,17 +399,18 @@ public class MemoryDataStore extends DataStore {
     }
     
     @Override
-    public List<InetAddress> getMostRecentGoodNodes(int numNodes, int port) {
+    public List<InetAddress> getMostRecentGoodNodes(int numNodes, int port, int serviceGroupsTrackedIndex) {
         addressToStatusMapLock.lock();
         try {
             List<InetAddress> resultsList = new java.util.LinkedList<InetAddress>();
-            LinkedList<PeerAndLastUpdateTime>.Node temp = statusToAddressesMap[PeerState.GOOD.ordinal()].getTail();
-            while (temp != null) {
+            java.util.LinkedList<InetSocketAddress> list = new java.util.LinkedList<InetSocketAddress>(bitsPeers[serviceGroupsTrackedIndex]);
+            Iterator<InetSocketAddress> it = list.descendingIterator();
+            while (it.hasNext()) {
                 if (resultsList.size() >= numNodes)
                     break;
-                if (temp.object.address.getPort() == port)
-                    resultsList.add(temp.object.address.getAddress());
-                temp = temp.prev;
+                InetSocketAddress a = it.next();
+                if (a.getPort() == port)
+                    resultsList.add(a.getAddress());
             }
             return resultsList;
         } finally {
@@ -419,8 +442,8 @@ public class MemoryDataStore extends DataStore {
         }
     }
 
-    ArrayList<Sha256Hash> blockHashList = new ArrayList<Sha256Hash>(300000);
-    int hashesStored = 0;
+    private ArrayList<Sha256Hash> blockHashList = new ArrayList<Sha256Hash>(300000);
+    private int hashesStored = 0;
     @Override
     public int getMinBestHeight() {
         synchronized (blockHashList) {
@@ -443,7 +466,9 @@ public class MemoryDataStore extends DataStore {
     @Override
     public Sha256Hash getHashAtHeight(int height) {
         synchronized (blockHashList) {
-            return blockHashList.get(height);
+            if (blockHashList.size() > height)
+                return blockHashList.get(height);
+            return null;
         }
     }
 

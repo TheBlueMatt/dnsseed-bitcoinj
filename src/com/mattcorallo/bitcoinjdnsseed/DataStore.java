@@ -24,7 +24,7 @@ import org.bitcoinj.core.Sha256Hash;
 
 
 public abstract class DataStore {
-    public static enum PeerState {
+    public enum PeerState {
         // UNTESTED MUST be first
         UNTESTED,
         LOW_BLOCK_COUNT,
@@ -60,7 +60,10 @@ public abstract class DataStore {
     public int connectionsPerSecond = 5;
     
     public final Object minVersionLock = new Object();
-    public int minVersion = 40000;
+    public int minVersion = 70011;
+
+    // Note that the item at position 0 has a privileged state as the "default", as well as minimum set of flags
+    public static final long[] SERVICE_GROUPS_TRACKED = {0x1, 0x9}; // See DnsSeed - currently broken for values >9
 
     public DataStore() {
         synchronized(retryTimesLock) {
@@ -80,11 +83,11 @@ public abstract class DataStore {
         }
     }
     
-    public abstract void addUpdateNode(InetSocketAddress addr, PeerState state);
+    public abstract void addUpdateNode(InetSocketAddress addr, PeerState state, long serviceBits);
     
     public abstract List<InetSocketAddress> getNodesToTest();
-    
-    public abstract List<InetAddress> getMostRecentGoodNodes(int numNodes, int port);
+
+    public abstract List<InetAddress> getMostRecentGoodNodes(int numNodes, int port, int serviceGroupsTrackedIndex);
     
     public abstract int getMinBestHeight();
     

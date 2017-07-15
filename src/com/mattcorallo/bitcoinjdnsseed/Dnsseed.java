@@ -32,12 +32,13 @@ import org.bitcoinj.utils.Threading;
 
 public class Dnsseed {
     static class ChannelFutureAndProgress {
-        public Sha256Hash targetHash;
-        public boolean hasReceivedAddressMessage = false;
-        public boolean hasPassedBlockDownloadTest = false;
-        public boolean hasAskedForBlocks = false;
-        public boolean hasPassed = false;
-        public DataStore.PeerState timeoutState = DataStore.PeerState.TIMEOUT;
+        Sha256Hash targetHash;
+        boolean hasReceivedAddressMessage = false;
+        boolean hasPassedBlockDownloadTest = false;
+        boolean hasAskedForBlocks = false;
+        boolean hasPassed = false;
+        long serviceBits = 0;
+        DataStore.PeerState timeoutState = DataStore.PeerState.TIMEOUT;
     }
     static final HashMap<Peer, ChannelFutureAndProgress> peerToChannelMap = new HashMap<Peer, ChannelFutureAndProgress>();
     static final NetworkParameters params = MainNetParams.get();
@@ -183,11 +184,21 @@ public class Dnsseed {
                 String[] values = line.split(" ");
                 if (values.length == 2) {
                     try {
-                        synchronized(store.minVersionLock) {
+                        synchronized (store.minVersionLock) {
                             store.minVersion = Integer.parseInt(values[1]);
                         }
                     } catch (NumberFormatException e) {
                         LogLine("Invalid argument");
+                    }
+                }
+            } else if (line.length() >= 3 && line.charAt(0) == 'a' && line.charAt(1) == ' ') {
+                String[] values = line.split(" ");
+                if (values.length == 2) {
+                    try {
+                        InetAddress addr = InetAddress.getByName(values[1]);
+                        ScanHost(new InetSocketAddress(addr, params.getPort()));
+                    } catch (UnknownHostException e) {
+                        LogLine("Unable to lookup host");
                     }
                 }
             } else if (line.equals("n")) {
@@ -237,7 +248,8 @@ public class Dnsseed {
     }
 
     private static void LaunchDumpGoodAddressesThread(final String fileName) { // In partial BIND Zonefile format
-        final String preEntry = "@\tIN\t";
+        final String host = "dnsseed.bluematt.me.";
+        final String preEntry = "\tIN\t";
         final String preIPv4Entry = "A\t";
         final String preIPv6Entry = "AAAA\t";
         final String postEntry = "\n";
@@ -247,15 +259,28 @@ public class Dnsseed {
                     try {
                         FileOutputStream file = new FileOutputStream(fileName + ".tmp");
                         // We grab the most recently tested nodes
-                        for (InetAddress address : store.getMostRecentGoodNodes(100, params.getPort())) {
-                            String line = null;
-                            if (address instanceof Inet4Address)
-                                line = preEntry + preIPv4Entry + address.getHostAddress() + postEntry;
-                            else if (address instanceof Inet6Address)
-                                line = preEntry + preIPv6Entry + address.getHostAddress() + postEntry;
-                            else
-                                ErrorExit("Unknown address type");
-                            file.write(line.getBytes());
+                        for (int i = 0; i < DataStore.SERVICE_GROUPS_TRACKED.length; i++) {
+                            int ipv4Count = 0, ipv6Count = 0;
+                            for (InetAddress address : store.getMostRecentGoodNodes(100, params.getPort(), i)) {
+                                String line = null;
+                                if (address instanceof Inet4Address) {
+                                    if (ipv4Count < 21)
+                                        line = preEntry + preIPv4Entry + address.getHostAddress() + postEntry;
+                                    ipv4Count++;
+                                } else if (address instanceof Inet6Address) {
+                                    if (ipv6Count < 12)
+                                        line = preEntry + preIPv6Entry + address.getHostAddress() + postEntry;
+                                    ipv6Count++;
+                                } else
+                                    ErrorExit("Unknown address type");
+                                if (line != null) {
+                                    if (i != 0)
+                                        line = "x" + (DataStore.SERVICE_GROUPS_TRACKED[i]) + "." + host + line; // TODO: Broken for >9 (needs hex encoding)
+                                    else
+                                        line = host + line;
+                                    file.write(line.getBytes());
+                                }
+                            }
                         }
                         file.close();
                         new File(fileName).delete();
@@ -373,6 +398,7 @@ public class Dnsseed {
                     System.out.println("r x y: Change retry time for status x (int value, see retry times section for name mappings) to y (in hours)");
                     System.out.println("w x: Change the amount of time a node is considered WAS_GOOD after it fails to x (in hours)");
                     System.out.println("p: Enable/disable updating these stats");
+                    System.out.println("a x: Scan node x");
                     System.out.print("\033[s"); // Save cursor position and provide a blank line before cursor
                     System.out.print("\033[;H\033[2K");
                     System.out.println("Most recent log:");
@@ -395,6 +421,16 @@ public class Dnsseed {
         }.start();
     }
 
+    private static boolean isTor(Inet6Address addr) {
+        byte[] addrB = addr.getAddress();
+        return addrB[0] == (byte)0xfd &&
+               addrB[1] == (byte)0x87 &&
+               addrB[2] == (byte)0xd8 &&
+               addrB[3] == (byte)0x7e &&
+               addrB[4] == (byte)0xeb &&
+               addrB[5] == (byte)0x43;
+    }
+
     private static void LaunchAddNodesThread() {
         new Thread() {
             public void run() {
@@ -405,11 +441,16 @@ public class Dnsseed {
                         numScansCompletedThisRound = 0;
                     }
                     for (final InetSocketAddress addr : addressesToTest) {
-                        if (addr.getAddress().isLoopbackAddress() || addr.getAddress().isSiteLocalAddress() ||
-                                addr.getAddress().isMulticastAddress())
-                            store.addUpdateNode(addr, DataStore.PeerState.UNTESTABLE_ADDRESS);
-                        else
-                            ScanHost(addr);
+                        try {
+                            if (addr.getAddress().isLoopbackAddress() || addr.getAddress().isSiteLocalAddress() ||
+                                    addr.getAddress().isMulticastAddress() ||
+                                    (addr.getAddress() instanceof Inet6Address && isTor((Inet6Address) addr.getAddress())))
+                                store.addUpdateNode(addr, DataStore.PeerState.UNTESTABLE_ADDRESS, 0);
+                            else
+                                ScanHost(addr);
+                        } catch (Exception e) {
+                            ErrorExit(e);
+                        }
                         synchronized(statusLock) {
                             numScansCompletedThisRound++;
                         }
@@ -466,7 +507,7 @@ public class Dnsseed {
                         throw new RuntimeException("Illegal state 3 (forcing peer disconnect in onPeerConnected)!");
                 }
                 DataStore.PeerState disconnectReason = null;
-                if ((peer.getPeerVersionMessage().localServices & VersionMessage.NODE_NETWORK) != VersionMessage.NODE_NETWORK)
+                if ((peer.getPeerVersionMessage().localServices & DataStore.SERVICE_GROUPS_TRACKED[0]) != DataStore.SERVICE_GROUPS_TRACKED[0])
                     disconnectReason = DataStore.PeerState.NOT_FULL_NODE;
                 synchronized(store.minVersionLock) {
                     if (peer.getPeerVersionMessage().clientVersion < store.minVersion)
@@ -493,6 +534,7 @@ public class Dnsseed {
                     ChannelFutureAndProgress peerState = peerToChannelMap.get(peer);
                     peerState.targetHash = store.getHashAtHeight(targetHeight);
                     peerState.timeoutState = DataStore.PeerState.TIMEOUT_DURING_REQUEST;
+                    peerState.serviceBits = peer.getPeerVersionMessage().localServices;
                 }
             }
 
@@ -634,7 +676,7 @@ public class Dnsseed {
                     DnsDiscovery discovery = new DnsDiscovery(params);
                     try {
                         for (InetSocketAddress addr : discovery.getPeers(10, TimeUnit.SECONDS)) {
-                            store.addUpdateNode(addr, DataStore.PeerState.UNTESTED);
+                            store.addUpdateNode(addr, DataStore.PeerState.UNTESTED, 0);
                         }
                     } catch (PeerDiscoveryException e) { }
                     try {
@@ -674,7 +716,7 @@ public class Dnsseed {
             if (future.isDone())
                 Futures.getUnchecked(future);
         } catch (Exception e) {
-            LogLine("Got error connecting to peer " + address + ": " + e.getCause().toString());
+            LogLine("Got error connecting to peer " + address + ": " + e.toString() + "(" + (e.getCause() == null ? "" : e.getCause().toString()) + ")");
             AsyncUpdatePeer(peer, DataStore.PeerState.PEER_DISCONNECTED);
         }
 
@@ -732,7 +774,7 @@ public class Dnsseed {
                             peer.close();
                         store.addUpdateNode(
                                 peer.getAddress().toSocketAddress(),
-                                peerState.timeoutState);
+                                peerState.timeoutState, peerState.serviceBits);
                     }
                 }
             });
@@ -746,7 +788,7 @@ public class Dnsseed {
                 public void run() {
                     for (PeerAddress address : addresses)
                         store.addUpdateNode(address.toSocketAddress(),
-                                DataStore.PeerState.UNTESTED);
+                                DataStore.PeerState.UNTESTED, 0);
                 }
             });
         }
