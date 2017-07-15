@@ -5,11 +5,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.net.Inet4Address;
-import java.net.Inet6Address;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
+import java.math.BigInteger;
+import java.net.*;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -20,31 +17,18 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.LogManager;
 
-import com.google.bitcoin.core.AbstractPeerEventListener;
-import com.google.bitcoin.core.AddressMessage;
-import com.google.bitcoin.core.AlertMessage;
-import com.google.bitcoin.core.Block;
-import com.google.bitcoin.core.BlockChain;
-import com.google.bitcoin.core.GetBlocksMessage;
-import com.google.bitcoin.core.GetAddrMessage;
-import com.google.bitcoin.core.GetDataMessage;
-import com.google.bitcoin.core.InventoryItem;
-import com.google.bitcoin.core.InventoryMessage;
-import com.google.bitcoin.core.Message;
-import com.google.bitcoin.core.NetworkParameters;
-import com.google.bitcoin.core.Peer;
-import com.google.bitcoin.core.PeerAddress;
-import com.google.bitcoin.core.PeerGroup;
-import com.google.bitcoin.core.Sha256Hash;
-import com.google.bitcoin.core.Transaction;
-import com.google.bitcoin.core.VersionMessage;
-import com.google.bitcoin.net.discovery.DnsDiscovery;
-import com.google.bitcoin.net.discovery.PeerDiscoveryException;
-import com.google.bitcoin.params.MainNetParams;
-import com.google.bitcoin.store.BlockStore;
-import com.google.bitcoin.store.BlockStoreException;
-import com.google.bitcoin.store.SPVBlockStore;
-import com.google.bitcoin.utils.Threading;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.UncheckedExecutionException;
+import org.bitcoinj.core.*;
+import org.bitcoinj.net.NioClientManager;
+import org.bitcoinj.net.discovery.DnsDiscovery;
+import org.bitcoinj.net.discovery.PeerDiscoveryException;
+import org.bitcoinj.params.MainNetParams;
+import org.bitcoinj.store.BlockStore;
+import org.bitcoinj.store.BlockStoreException;
+import org.bitcoinj.store.SPVBlockStore;
+import org.bitcoinj.utils.Threading;
 
 public class Dnsseed {
     static class ChannelFutureAndProgress {
@@ -56,10 +40,11 @@ public class Dnsseed {
         public DataStore.PeerState timeoutState = DataStore.PeerState.TIMEOUT;
     }
     static final HashMap<Peer, ChannelFutureAndProgress> peerToChannelMap = new HashMap<Peer, ChannelFutureAndProgress>();
-    static PeerGroup peerGroup;
     static final NetworkParameters params = MainNetParams.get();
     static DataStore store;
     static File blockChainFile;
+    static NioClientManager connectionManager;
+    static PeerEventListener peerListener;
     static BlockStore blockStore;
     static BlockChain chain;
 
@@ -136,8 +121,8 @@ public class Dnsseed {
                     while (exitableSemaphore > 0)
                         exitableLock.wait();
                     PauseScanning();
-                    peerGroup.stopAsync();
-                    peerGroup.awaitTerminated(1, TimeUnit.SECONDS);
+                    connectionManager.stopAsync();
+                    connectionManager.awaitTerminated();
                     if (store instanceof MemoryDataStore) {
                         ((MemoryDataStore)store).saveNodesState();
                         ((MemoryDataStore)store).saveConfigAndBlocksState();
@@ -468,28 +453,14 @@ public class Dnsseed {
 
     private static void InitPeerGroup(final String localPeerAddress) throws BlockStoreException, UnknownHostException {
         chain = new BlockChain(params, blockStore);
-        peerGroup = new PeerGroup(params, chain) {
-            @Override
-            protected Peer selectDownloadPeer(List<Peer> peers) {
-                return null;
-            }
-        };
-        peerGroup.setUserAgent("DNSSeed", "42");
-        peerGroup.startAsync().awaitRunning();
+        connectionManager = new NioClientManager();
+        connectionManager.startAsync();
+        connectionManager.awaitRunning();
 
-        final Peer localPeerOutside = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.getPort()));
 
-        peerGroup.addEventListener(new AbstractPeerEventListener() {
-            Peer localPeer = localPeerOutside;
+        peerListener = new AbstractPeerEventListener() {
             @Override
             public void onPeerConnected(Peer peer, int peerCount) {
-                if (peer == localPeer) {
-                    if (peer.getBestHeight() == chain.getBestChainHeight())
-                        StartScan(peer);
-                    peer.setDownloadParameters(System.currentTimeMillis() / 1000 - 60*60, false);
-                    peer.startBlockChainDownload();
-                    return;
-                }
                 synchronized(peerToChannelMap) {
                     if (peerToChannelMap.get(peer) == null)
                         throw new RuntimeException("Illegal state 3 (forcing peer disconnect in onPeerConnected)!");
@@ -527,43 +498,15 @@ public class Dnsseed {
 
             @Override
             public void onPeerDisconnected(Peer peer, int peerCount) {
-                if (peer == localPeer) {
-                    new Thread(new Runnable() {
-                        public void run() {
-                            localPeer = null;
-                            try {
-                                Thread.sleep(1000);
-                            } catch (InterruptedException e1) { }
-                            if (localPeer != null)
-                                return;
-                            LogLine("Reconnecting to local peer after onPeerDisconnected");
-                            try {
-                                localPeer = peerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.getPort()));
-                            } catch (UnknownHostException e) {
-                                ErrorExit("UnknownHostException trying to reconnect to localPeer");
-                                throw new RuntimeException(e);
-                            }
-                        }
-                    }).start();
-                }
                 AsyncUpdatePeer(peer, DataStore.PeerState.PEER_DISCONNECTED);
             }
 
             @Override
             public Message onPreMessageReceived(Peer peer, Message m) {
                 if (m instanceof AddressMessage) {
-                    if (peer != localPeer)
-                        PeerProvidedAddressMessage(peer);
+                    PeerProvidedAddressMessage(peer);
                     AsyncAddUntestedNodes(((AddressMessage)m).getAddresses());
                     return null;
-                }
-                if (peer == localPeer) {
-                    if (m instanceof Block) {
-                        synchronized(exitableLock) {
-                            exitableSemaphore++;
-                        }
-                    }
-                    return m;
                 }
                 if (m instanceof Block || m instanceof InventoryMessage) {
                     ChannelFutureAndProgress peerState;
@@ -592,9 +535,65 @@ public class Dnsseed {
                     return null;
                 return m;
             }
+        };
+
+        final PeerGroup localPeerGroup = new PeerGroup(params, chain);
+        localPeerGroup.startAsync();
+        localPeerGroup.awaitRunning();
+        final Peer localPeerOutside = localPeerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.getPort()));
+
+        localPeerGroup.addEventListener(new AbstractPeerEventListener() {
+            Peer localPeer = localPeerOutside;
+            @Override
+            public void onPeerConnected(Peer peer, int peerCount) {
+                if (peer.getBestHeight() == chain.getBestChainHeight())
+                    StartScan(peer);
+                peer.setDownloadParameters(System.currentTimeMillis() / 1000 - 60*60, false);
+                peer.startBlockChainDownload();
+                peer.sendMessage(new GetAddrMessage(params));
+            }
 
             @Override
-            public void onBlocksDownloaded(Peer peer, Block block, int blocksLeft) {
+            public void onPeerDisconnected(Peer peer, int peerCount) {
+                if (peer == localPeer) {
+                    new Thread(new Runnable() {
+                        public void run() {
+                            localPeer = null;
+                            try {
+                                Thread.sleep(1000);
+                            } catch (InterruptedException e1) { }
+                            if (!connectionManager.isRunning())
+                                return;
+                            if (localPeer != null)
+                                return;
+                            LogLine("Reconnecting to local peer after onPeerDisconnected");
+                            try {
+                                localPeer = localPeerGroup.connectTo(new InetSocketAddress(InetAddress.getByName(localPeerAddress), params.getPort()));
+                            } catch (UnknownHostException e) {
+                                ErrorExit("UnknownHostException trying to reconnect to localPeer");
+                                throw new RuntimeException(e);
+                            }
+                        }
+                    }).start();
+                }
+            }
+
+            @Override
+            public Message onPreMessageReceived(Peer peer, Message m) {
+                if (m instanceof AddressMessage) {
+                    AsyncAddUntestedNodes(((AddressMessage)m).getAddresses());
+                    return null;
+                }
+                if (m instanceof Block) {
+                    synchronized(exitableLock) {
+                        exitableSemaphore++;
+                    }
+                }
+                return m;
+            }
+
+            @Override
+            public void onBlocksDownloaded(Peer peer, Block block, FilteredBlock filteredBlock, int blocksLeft) {
                 try {
                     store.putHashAtHeight(blockStore.get(block.getHash()).getHeight(), block.getHash());
                 } catch (BlockStoreException e) {
@@ -647,21 +646,34 @@ public class Dnsseed {
                 }
         }
 
-        try {
-            final Peer peer = peerGroup.connectTo(address);
-            synchronized(peerToChannelMap) {
-                peerToChannelMap.put(peer, new ChannelFutureAndProgress());
-            }
+        PeerAddress addr = new PeerAddress(address);
+        VersionMessage verMsg = new VersionMessage(params, chain.getBestChainHeight());
+        verMsg.relayTxesBeforeFilter = false;
+        verMsg.appendToSubVer("DNSSeed", "42", null);
+        verMsg.theirAddr = addr;
 
-            synchronized (store.totalRunTimeoutLock) {
-                nodeTimeoutExecutor.schedule(new Runnable() {
-                    public void run() {
-                        AsyncUpdatePeer(peer, null);
-                    }
-                }, store.totalRunTimeout, TimeUnit.SECONDS);
-            }
+        final Peer peer = new Peer(params, verMsg, addr, null);
+        peer.addEventListener(peerListener, Threading.SAME_THREAD);
+        synchronized(peerToChannelMap) {
+            peerToChannelMap.put(peer, new ChannelFutureAndProgress());
+        }
+        peer.setSocketTimeout((store.totalRunTimeout + 10) * 1000);
+
+        try {
+            ListenableFuture<SocketAddress> future = connectionManager.openConnection(address, peer);
+            if (future.isDone())
+                Futures.getUnchecked(future);
         } catch (Exception e) {
-            LogLine("Got error connecting to peer " + address + ": " + e.toString());
+            LogLine("Got error connecting to peer " + address + ": " + e.getCause().toString());
+            AsyncUpdatePeer(peer, DataStore.PeerState.PEER_DISCONNECTED);
+        }
+
+        synchronized (store.totalRunTimeoutLock) {
+            nodeTimeoutExecutor.schedule(new Runnable() {
+                public void run() {
+                    AsyncUpdatePeer(peer, null);
+                }
+            }, store.totalRunTimeout, TimeUnit.SECONDS);
         }
     }
 
@@ -734,7 +746,8 @@ public class Dnsseed {
     public static void LogLine(String line) {
         synchronized(logList) {
             logList.addLast(line);
-            logList.removeFirst();
+            if (logList.size() > 10)
+                logList.removeFirst();
         }
     }
 }

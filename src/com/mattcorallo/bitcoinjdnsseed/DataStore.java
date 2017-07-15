@@ -4,7 +4,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.List;
 
-import com.google.bitcoin.core.Sha256Hash;
+import org.bitcoinj.core.Sha256Hash;
 
 /**
  * Copyright 2012 Matt Corallo.

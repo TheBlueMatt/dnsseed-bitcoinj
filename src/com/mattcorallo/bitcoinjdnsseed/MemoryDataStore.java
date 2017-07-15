@@ -19,9 +19,9 @@ import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-import com.google.bitcoin.core.Sha256Hash;
-import com.google.bitcoin.core.StoredBlock;
-import com.google.bitcoin.store.BlockStore;
+import org.bitcoinj.core.Sha256Hash;
+import org.bitcoinj.core.StoredBlock;
+import org.bitcoinj.store.BlockStore;
 import com.google.common.hash.BloomFilter;
 import com.google.common.hash.Funnel;
 import com.google.common.hash.PrimitiveSink;
@@ -140,14 +140,12 @@ class PeerAndLastUpdateTime implements FastSerializer {
     // For deserialization
     PeerAndLastUpdateTime() {}
     
-    @Override
     public void writeTo(ObjectOutputStream stream) throws IOException {
         stream.writeObject(address);
         stream.writeLong(lastUpdateTime);
         stream.writeLong(lastGoodTime);
     }
     
-    @Override
     public void readFrom(ObjectInputStream stream) throws IOException, ClassNotFoundException {
         this.address = (InetSocketAddress)stream.readObject();
         this.lastUpdateTime = stream.readLong();
@@ -324,7 +322,6 @@ public class MemoryDataStore extends DataStore {
 
     private void createFilter() {
         badNodesFilter = BloomFilter.create(new Funnel<InetSocketAddress>() {
-            @Override
             public void funnel(InetSocketAddress from, PrimitiveSink into) {
                 into.putBytes(from.getAddress().getAddress());
             }
