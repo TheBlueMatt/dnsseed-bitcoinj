@@ -19,6 +19,7 @@ import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import com.mattcorallo.bitcoinjdnsseed.filter.LossyBloomFilter;
 import org.bitcoinj.core.Sha256Hash;
 import org.bitcoinj.core.StoredBlock;
 import org.bitcoinj.store.BlockStore;
@@ -291,7 +292,7 @@ public class MemoryDataStore extends DataStore {
     }
 
     private void createFilter() {
-        badNodesFilter = BloomFilter.create(new Funnel<InetSocketAddress>() {
+        badNodesFilter = LossyBloomFilter.create(new Funnel<InetSocketAddress>() {
             public void funnel(InetSocketAddress from, PrimitiveSink into) {
                 into.putBytes(from.getAddress().getAddress());
             }
@@ -303,7 +304,7 @@ public class MemoryDataStore extends DataStore {
     private HashMap<InetSocketAddress, PeerStateAndNode> addressToStatusMap = new HashMap<InetSocketAddress, PeerStateAndNode>();
     private LinkedList<PeerAndLastUpdateTime>[] statusToAddressesMap = new LinkedList[PeerState.values().length];
 
-    private BloomFilter<InetSocketAddress> badNodesFilter;
+    private LossyBloomFilter<InetSocketAddress> badNodesFilter;
     private long badNodesFilterClearTime;
     @Override
     public void addUpdateNode(InetSocketAddress addr, PeerState state) {
@@ -336,8 +337,6 @@ public class MemoryDataStore extends DataStore {
                     temp = temp.next;
                 }
             }
-            if (badNodesFilterClearTime < System.currentTimeMillis() - retryTimes[PeerState.TIMEOUT.ordinal()]*1000)
-                createFilter();
             addressToStatusMapLock.unlock();
         }
         // We do significantly more work when testing nodes which return results,
